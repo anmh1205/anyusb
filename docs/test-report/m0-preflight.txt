@@ -80,7 +80,7 @@ Number of signatures successfully Verified: 2
 Number of errors: 0
 
 > Get-FileHash -LiteralPath USBip-0.9.8.1-x64.exe
-38CAD6D4432B52D5BB9409D9AD03B72FDFC4ADA4CD3A48FBECA1A2752A8518A
+38CAD6D4432B52D5BB9409D9AD03B72FDFFC4ADA4CD3A48FBECA1A2752A8518A
 > Get-AuthenticodeSignature -LiteralPath USBip-0.9.8.1-x64.exe
 Valid | Signature verified. | Cloudyne Systems (Scheibling Consulting AB)
 
