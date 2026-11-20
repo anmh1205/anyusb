@@ -49,5 +49,17 @@ func (a *Adapter) Doctor(ctx context.Context) []platform.Check {
 	if !probe.OK {
 		probe.Detail = fmt.Sprintf("port %s is unreachable on loopback; check usbipd if this machine exports devices", usbipPort)
 	}
-	return append(checks, probe)
+	checks = append(checks, probe)
+	if probe.OK {
+		properties, err := a.run(ctx, "systemctl", "show", "anyusb-usbipd.service", "-p", "IPAddressDeny", "-p", "IPAddressAllow")
+		scoped := err == nil && strings.Contains(properties, "IPAddressDeny=") &&
+			(strings.Contains(properties, "IPAddressAllow=localhost") || strings.Contains(properties, "IPAddressAllow=127.0.0.0/8")) &&
+			(strings.Contains(properties, "IPAddressDeny=any") || strings.Contains(properties, "IPAddressDeny=0.0.0.0/0"))
+		firewall := platform.Check{Name: "TCP 3240 peer isolation", OK: scoped, Detail: "AnyUSB backend unit has loopback IP restrictions configured; verify from another machine"}
+		if !scoped {
+			firewall.Detail = "loopback-only backend policy not detected; scope TCP 3240 to loopback or verify the host firewall from a peer"
+		}
+		checks = append(checks, firewall)
+	}
+	return checks
 }

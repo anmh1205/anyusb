@@ -57,6 +57,7 @@ type Check struct {
 
 type Adapter interface {
 	ListLocalDevices(context.Context) ([]Device, error)
+	LocalSerialPorts(context.Context, string) ([]string, error)
 	Export(context.Context, string) (Device, error)
 	Unexport(context.Context, string) (Device, error)
 	ListRemote(context.Context, string) ([]RemoteDevice, error)

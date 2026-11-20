@@ -6,11 +6,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -18,12 +16,6 @@ import (
 )
 
 const commandTimeout = 10 * time.Second
-
-var (
-	busIDPattern = regexp.MustCompile(`^[1-9][0-9]*-[1-9][0-9]*(\.[1-9][0-9]*)*$`)
-	labelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
-	zonePattern  = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,64}$`)
-)
 
 type Adapter struct {
 	usbip   string
@@ -89,23 +81,4 @@ func (a *Adapter) run(ctx context.Context, tool string, args ...string) (string,
 		return "", fmt.Errorf("%s: %w", command, err)
 	}
 	return "", fmt.Errorf("%s: %w: %s", command, err, detail)
-}
-
-func normalizeHost(host string) (string, error) {
-	if addr, err := netip.ParseAddr(host); err == nil {
-		if zone := addr.Zone(); zone != "" && !zonePattern.MatchString(zone) {
-			return "", fmt.Errorf("%w: invalid IPv6 scope", platform.ErrInvalid)
-		}
-		return addr.String(), nil
-	}
-	name := strings.TrimSuffix(host, ".")
-	if len(name) > 253 {
-		return "", fmt.Errorf("%w: hostname is too long", platform.ErrInvalid)
-	}
-	for _, label := range strings.Split(name, ".") {
-		if !labelPattern.MatchString(label) {
-			return "", fmt.Errorf("%w: provide a hostname or IP address without a port", platform.ErrInvalid)
-		}
-	}
-	return strings.ToLower(host), nil
 }

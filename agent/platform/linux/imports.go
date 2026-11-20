@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -13,35 +12,18 @@ import (
 	"github.com/anmh1205/anyusb/agent/platform"
 )
 
-const usbipPort = "3240"
+const usbipPort = platform.StandardPort
 
-var idsPattern = regexp.MustCompile(`\(([0-9a-fA-F]{4}):([0-9a-fA-F]{4})\)$`)
-
-func (a *Adapter) ListRemote(ctx context.Context, host string) ([]platform.RemoteDevice, error) {
-	peer, err := normalizeHost(host)
+func (a *Adapter) ListRemote(ctx context.Context, endpoint string) ([]platform.RemoteDevice, error) {
+	peer, port, err := platform.USBIPEndpoint(endpoint)
 	if err != nil {
 		return nil, err
 	}
-	output, err := a.run(ctx, "usbip", "list", "--remote="+peer)
+	output, err := a.run(ctx, "usbip", "--tcp-port="+port, "list", "--remote="+peer)
 	if err != nil {
 		return nil, err
 	}
-	devices := make([]platform.RemoteDevice, 0)
-	for line := range strings.Lines(output) {
-		busID, description, found := strings.Cut(strings.TrimSpace(line), ":")
-		if !found || !busIDPattern.MatchString(busID) {
-			continue
-		}
-		device := platform.RemoteDevice{BusID: busID, Name: strings.TrimSpace(description)}
-		if ids := idsPattern.FindStringSubmatch(device.Name); ids != nil {
-			device.VendorID, device.ProductID = strings.ToLower(ids[1]), strings.ToLower(ids[2])
-		}
-		devices = append(devices, device)
-	}
-	if strings.TrimSpace(output) != "" && len(devices) == 0 {
-		return nil, fmt.Errorf("%w: unrecognized usbip list output", platform.ErrUnavailable)
-	}
-	return devices, nil
+	return platform.RemoteList(output)
 }
 
 func (a *Adapter) ListImports(ctx context.Context) ([]platform.Import, error) {
@@ -81,7 +63,7 @@ func parseImports(output string) ([]platform.Import, error) {
 			continue
 		}
 		if busID, target, found := strings.Cut(line, " -> "); found {
-			if busIDPattern.MatchString(busID) {
+			if platform.BusIDPattern.MatchString(busID) {
 				current.LocalBusID = busID
 			}
 			if endpoint, ok := strings.CutPrefix(target, "usbip://"); ok {
@@ -128,17 +110,17 @@ func (a *Adapter) serialPorts(busID string) []string {
 }
 
 func (a *Adapter) Attach(ctx context.Context, host, busID string) (platform.Import, error) {
-	peer, err := normalizeHost(host)
+	peer, port, err := platform.USBIPEndpoint(host)
 	if err != nil {
 		return platform.Import{}, err
 	}
-	if !busIDPattern.MatchString(busID) {
+	if !platform.BusIDPattern.MatchString(busID) {
 		return platform.Import{}, fmt.Errorf("%w: invalid remote USB busid %q", platform.ErrInvalid, busID)
 	}
 	lookup := func(ctx context.Context) (platform.Import, bool, error) {
 		imports, err := a.ListImports(ctx)
 		for _, imported := range imports {
-			if strings.EqualFold(imported.RemoteHost, peer) && imported.RemotePort == usbipPort && imported.RemoteBusID == busID {
+			if strings.EqualFold(imported.RemoteHost, peer) && imported.RemotePort == port && imported.RemoteBusID == busID {
 				return imported, true, nil
 			}
 		}
@@ -147,7 +129,7 @@ func (a *Adapter) Attach(ctx context.Context, host, busID string) (platform.Impo
 	if imported, found, err := lookup(ctx); found || err != nil {
 		return imported, err
 	}
-	if _, err := a.run(ctx, "usbip", "attach", "--remote="+peer, "--busid="+busID); err != nil {
+	if _, err := a.run(ctx, "usbip", "--tcp-port="+port, "attach", "--remote="+peer, "--busid="+busID); err != nil {
 		return platform.Import{}, err
 	}
 

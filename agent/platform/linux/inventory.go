@@ -9,12 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/anmh1205/anyusb/agent/platform"
 )
-
-const hotplugInterval = time.Second
 
 func readAttribute(devicePath, name string) string {
 	value, _ := os.ReadFile(filepath.Join(devicePath, name))
@@ -33,7 +30,7 @@ func (a *Adapter) ListLocalDevices(ctx context.Context) ([]platform.Device, erro
 			return nil, err
 		}
 		busID := entry.Name()
-		if !busIDPattern.MatchString(busID) {
+		if !platform.BusIDPattern.MatchString(busID) {
 			continue
 		}
 		path := filepath.Join(directory, busID)
@@ -133,83 +130,20 @@ func (a *Adapter) setExport(ctx context.Context, target string, exported bool) (
 	if err != nil {
 		return platform.Device{}, fmt.Errorf("%w: %s completed but inventory could not be confirmed: %v", platform.ErrConflict, verb, err)
 	}
-	if !sameIncarnation(device, current) || current.Exported != exported {
+	if !platform.SameIncarnation(device, current) || current.Exported != exported {
 		return platform.Device{}, fmt.Errorf("%w: %s completed but %s changed; list devices again", platform.ErrConflict, verb, device.BusID)
 	}
 	return current, nil
 }
 
 func (a *Adapter) WatchHotplug(ctx context.Context) (<-chan platform.HotplugEvent, error) {
-	devices, err := a.ListLocalDevices(ctx)
+	return platform.PollHotplug(ctx, a.ListLocalDevices)
+}
+
+func (a *Adapter) LocalSerialPorts(ctx context.Context, target string) ([]string, error) {
+	device, err := a.findDevice(ctx, target)
 	if err != nil {
 		return nil, err
 	}
-	events := make(chan platform.HotplugEvent, 16)
-	go func() {
-		defer close(events)
-		ticker := time.NewTicker(hotplugInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				current, err := a.ListLocalDevices(ctx)
-				if err != nil {
-					continue
-				}
-				for _, event := range inventoryChanges(devices, current) {
-					select {
-					case events <- event:
-					case <-ctx.Done():
-						return
-					}
-				}
-				devices = current
-			}
-		}
-	}()
-	return events, nil
-}
-
-func inventoryChanges(previous, current []platform.Device) []platform.HotplugEvent {
-	old := devicesByBusID(previous)
-	now := devicesByBusID(current)
-	events := make([]platform.HotplugEvent, 0)
-	for _, device := range previous {
-		if replacement, ok := now[device.BusID]; !ok || !sameIncarnation(device, replacement) {
-			events = append(events, platform.HotplugEvent{Type: "removed", Device: device})
-		}
-	}
-	for _, device := range current {
-		before, ok := old[device.BusID]
-		var kind string
-		switch {
-		case !ok || !sameIncarnation(before, device):
-			kind = "arrived"
-		case !before.Exported && device.Exported:
-			kind = "exported"
-		case before.Exported && !device.Exported:
-			kind = "unexported"
-		case before != device:
-			kind = "changed"
-		}
-		if kind != "" {
-			events = append(events, platform.HotplugEvent{Type: kind, Device: device})
-		}
-	}
-	return events
-}
-
-func sameIncarnation(left, right platform.Device) bool {
-	return left.ID == right.ID && left.Incarnation == right.Incarnation &&
-		left.VendorID == right.VendorID && left.ProductID == right.ProductID && left.Serial == right.Serial
-}
-
-func devicesByBusID(devices []platform.Device) map[string]platform.Device {
-	result := make(map[string]platform.Device, len(devices))
-	for _, device := range devices {
-		result[device.BusID] = device
-	}
-	return result
+	return a.serialPorts(device.BusID), nil
 }
