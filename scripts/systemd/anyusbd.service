@@ -1,0 +1,14 @@
+[Unit]
+Description=AnyUSB local USB/IP agent
+After=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/anyusbd
+RuntimeDirectory=anyusb
+RuntimeDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

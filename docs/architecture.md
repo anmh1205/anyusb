@@ -1,7 +1,7 @@
 # AnyUSB architecture
 
 **Phase 1 design.** The [M0 report](test-report/m0.md) records the evidence and
-open hardware checks. M1 requires a decision after the spike report.
+open hardware checks. M1 implements the Linux backend, local agent API and CLI.
 
 ## Components and interfaces
 
@@ -28,6 +28,14 @@ flowchart LR
 | --- | --- | --- | --- |
 | Linux | `usbip-host`, `usbipd`, `usbip bind` and `usbip unbind` | `vhci_hcd`, `usbip list --remote`, `usbip attach`, `usbip port`, `usbip detach` | sysfs topology, udev notifications and inventory reconciliation |
 | Windows | `usbipd-win` service, `usbipd bind`, `usbipd unbind` | `usbip-win2` UDE, `usbip.exe list`, `attach`, `port`, `detach` | `usbipd state` JSON, PnP location paths and device notifications |
+
+M1 polls Linux sysfs for inventory changes once per second. The local HTTP API
+uses a root-only Unix socket, with no TCP listener. It serves device and import
+snapshots, share and unshare, connect and disconnect, diagnostics, and a
+newline-delimited JSON event stream. Mutations are serialized across callers.
+The native `usbipd` remains a separate service. The M1 agent neither starts it
+nor changes firewall rules. The table's udev notifications, Windows adapter and
+remote control plane describe later milestones.
 
 The adapter exposes `ListLocalDevices`, `Export`, `Unexport`, `ListRemote`,
 `Attach`, `Detach`, and `WatchHotplug`. Use typed state for inventory, errors,
