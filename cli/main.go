@@ -24,12 +24,18 @@ import (
 
 const usage = `Usage: anyusb [-socket PATH] [-json] COMMAND
 
-  list [--remote HOST | --imports]
-  share DEVICE_ID_OR_BUSID
-  unshare DEVICE_ID_OR_BUSID
-  connect HOST BUSID
-  disconnect VHCI_PORT
-  watch
+  list [--remote HOST | --imports | --peer PEER | --connections | --shared]
+  share [--managed] DEVICE_ID_OR_BUSID
+  unshare [--managed] DEVICE_ID_OR_BUSID
+  connect HOST BUSID | connect --peer PEER DEVICE
+  disconnect VHCI_PORT | disconnect --lease ID
+  watch [--peer PEER]
+  discover | peers | pair invite | pair HOST CODE
+  revoke PEER | peer-address PEER HOST
+  chip-id|reset|erase PEER DEVICE [--port PORT] [--baud BAUD]
+  flash|verify PEER DEVICE [--port PORT] [--baud BAUD] (--idf FILE | OFFSET=FILE...)
+  monitor PEER DEVICE [--port PORT] [--baud BAUD] [--dtr] [--rts]
+  ui
   doctor`
 
 func main() {
@@ -47,7 +53,7 @@ func main() {
 func runCLI(ctx context.Context, args []string, output io.Writer) error {
 	socketDefault := os.Getenv("ANYUSB_SOCKET")
 	if socketDefault == "" {
-		socketDefault = core.DefaultSocket
+		socketDefault = defaultSocket
 	}
 	flags := flag.NewFlagSet("anyusb", flag.ContinueOnError)
 	flags.SetOutput(output)
@@ -64,6 +70,9 @@ func runCLI(ctx context.Context, args []string, output io.Writer) error {
 	}
 	command, args := args[0], args[1:]
 	c := newClient(*socket)
+	if handled, err := managedCLI(ctx, c, command, args, output, *jsonOutput); handled {
+		return err
+	}
 	result := func(data any, message string, err error) error {
 		if err != nil {
 			return err

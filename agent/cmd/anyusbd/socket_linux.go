@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,7 +11,7 @@ import (
 	"time"
 )
 
-func listenLocal(path string) (*net.UnixListener, *os.File, error) {
+func listenLocal(path string) (net.Listener, io.Closer, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, nil, fmt.Errorf("socket requires a clean, absolute path")
 	}

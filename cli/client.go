@@ -19,11 +19,12 @@ type client struct {
 }
 
 func newClient(socket string) client {
-	dialer := &net.Dialer{Timeout: 2 * time.Second}
 	return client{socket: socket, http: &http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return dialer.DialContext(ctx, "unix", socket)
+				ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				defer cancel()
+				return dialLocal(ctx, socket)
 			},
 			ResponseHeaderTimeout: core.CallTimeout + time.Second,
 		},
@@ -40,18 +41,26 @@ func (c client) request(ctx context.Context, method, path string, payload any) (
 		}
 		body = bytes.NewReader(data)
 	}
+	contentType := ""
+	if body != nil {
+		contentType = "application/json"
+	}
+	return c.requestBody(ctx, method, path, body, contentType)
+}
+
+func (c client) requestBody(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, "http://"+core.LocalHost+path, body)
 	if err != nil {
 		return nil, err
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("contact anyusbd on %s: %w", c.socket, err)
 	}
-	if res.StatusCode == http.StatusOK {
+	if res.StatusCode >= 200 && res.StatusCode < 300 {
 		return res, nil
 	}
 	defer res.Body.Close()

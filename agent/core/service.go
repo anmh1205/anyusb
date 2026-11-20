@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/anmh1205/anyusb/agent/platform"
@@ -16,6 +17,7 @@ import (
 
 const (
 	DefaultSocket = "/run/anyusb/control.sock"
+	DefaultPipe   = `\\.\pipe\anyusb-control`
 	LocalHost     = "anyusb"
 	CallTimeout   = 35 * time.Second
 )
@@ -30,17 +32,42 @@ type ErrorResponse struct {
 	Message string `json:"message"`
 }
 
-func Handler(adapter platform.Adapter) http.Handler {
+type Options struct {
+	Mesh     http.Handler
+	ESPCheck func() platform.Check
+	UIURL    string
+	RawShare func(context.Context, string, bool) (platform.Device, error)
+}
+
+func Handler(adapter platform.Adapter, options Options) http.Handler {
 	router := http.NewServeMux()
+	if options.Mesh != nil {
+		router.Handle("/v1/mesh/", options.Mesh)
+	}
+	router.HandleFunc("GET /v1/ui", respond(func(*http.Request) (map[string]string, error) {
+		if options.UIURL == "" {
+			return nil, fmt.Errorf("%w: local web UI is disabled", platform.ErrUnavailable)
+		}
+		return map[string]string{"url": options.UIURL}, nil
+	}))
 	mutation := make(chan struct{}, 1)
+	share := options.RawShare
+	if share == nil {
+		share = func(ctx context.Context, device string, enabled bool) (platform.Device, error) {
+			if enabled {
+				return adapter.Export(ctx, device)
+			}
+			return adapter.Unexport(ctx, device)
+		}
+	}
 	router.HandleFunc("GET /v1/devices", respond(func(r *http.Request) ([]platform.Device, error) {
 		return adapter.ListLocalDevices(r.Context())
 	}))
 	router.Handle("PUT /v1/devices/{id}/export", serialize(mutation, respond(func(r *http.Request) (platform.Device, error) {
-		return adapter.Export(r.Context(), r.PathValue("id"))
+		return share(r.Context(), r.PathValue("id"), true)
 	})))
 	router.Handle("DELETE /v1/devices/{id}/export", serialize(mutation, respond(func(r *http.Request) (platform.Device, error) {
-		return adapter.Unexport(r.Context(), r.PathValue("id"))
+		return share(r.Context(), r.PathValue("id"), false)
 	})))
 	router.HandleFunc("GET /v1/remote-devices", respond(func(r *http.Request) ([]platform.RemoteDevice, error) {
 		return adapter.ListRemote(r.Context(), r.URL.Query().Get("host"))
@@ -63,7 +90,11 @@ func Handler(adapter platform.Adapter) http.Handler {
 		return struct{}{}, adapter.Detach(r.Context(), port)
 	})))
 	router.HandleFunc("GET /v1/doctor", respond(func(r *http.Request) ([]platform.Check, error) {
-		return adapter.Doctor(r.Context()), nil
+		checks := adapter.Doctor(r.Context())
+		if options.ESPCheck != nil {
+			checks = append(checks, options.ESPCheck())
+		}
+		return checks, nil
 	}))
 	router.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
 		streamEvents(w, r, adapter)
@@ -73,7 +104,7 @@ func Handler(adapter platform.Adapter) http.Handler {
 			writeJSON(w, http.StatusForbidden, ErrorResponse{Code: "forbidden", Message: "local Unix socket clients only"})
 			return
 		}
-		if r.Method == http.MethodGet && r.URL.Path == "/v1/events" {
+		if (r.Method == http.MethodGet && r.URL.Path == "/v1/events") || strings.HasPrefix(r.URL.Path, "/v1/mesh/") {
 			router.ServeHTTP(w, r)
 			return
 		}

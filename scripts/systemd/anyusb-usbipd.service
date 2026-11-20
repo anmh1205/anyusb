@@ -1,0 +1,13 @@
+[Unit]
+Description=Stock USB/IP backend for AnyUSB
+After=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env usbipd
+IPAddressDeny=any
+IPAddressAllow=localhost
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

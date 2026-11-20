@@ -1,0 +1,95 @@
+#Requires -RunAsAdministrator
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)] [string] $BuildDirectory,
+    [string] $Python,
+    [string[]] $PeerSources = @(),
+    [switch] $KeepStockUsbipRule
+)
+$ErrorActionPreference = 'Stop'
+$build = (Resolve-Path -LiteralPath $BuildDirectory).Path
+foreach ($file in @('anyusbd.exe', 'anyusb.exe')) {
+    if (!(Test-Path -LiteralPath (Join-Path $build $file) -PathType Leaf)) { throw "Missing $file" }
+}
+if (Get-Service -Name anyusbd -ErrorAction SilentlyContinue) {
+    throw 'The anyusbd service already exists. Use the current installation or remove that service before a fresh install.'
+}
+$architecture = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+$assets = @(
+    @{
+        Name = "usbipd-win_5.3.0_$architecture.msi"; Repo = 'dorssel/usbipd-win'; Tag = 'v5.3.0'
+        Exe = 'usbipd.exe'; Folder = 'usbipd-win'; Version = '5.3.0'; Description = 'VBoxUSB and VBoxUSBMon drivers, usbipd service and default TCP 3240 local-subnet rule'
+    },
+    @{
+        Name = "USBip-0.9.8.1-$architecture.exe"; Repo = 'vadimgrn/usbip-win2'; Tag = 'v.0.9.8.1'
+        Exe = 'usbip.exe'; Folder = 'USBip'; Version = '0.9.8.1'; Description = 'usbip2_ude and usbip2_filter drivers, detached-device shutdown task, USB device restart and possible reboot'
+    }
+)
+foreach ($asset in $assets) {
+    Write-Host "$($asset.Name) installs $($asset.Description)."
+}
+if (!$KeepStockUsbipRule) { Write-Host 'Disable the upstream inbound usbipd rule for managed mode.' }
+if ($PeerSources.Count -gt 0) { Write-Host "Allow inbound HTTPS peer traffic TCP 47443 from $($PeerSources -join ', ')." }
+Write-Host 'Install the AnyUSB Windows service. Windows installers will display their own UI.'
+if ((Read-Host 'Type INSTALL to continue') -cne 'INSTALL') { return }
+
+$download = Join-Path $env:TEMP ('anyusb-install-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $download | Out-Null
+foreach ($asset in $assets) {
+    $installed = Join-Path $env:ProgramFiles (Join-Path $asset.Folder $asset.Exe)
+    if (Test-Path -LiteralPath $installed -PathType Leaf) {
+        $foundVersion = & $installed --version
+        if ($LASTEXITCODE -eq 0 -and ($foundVersion -join ' ').Contains($asset.Version)) {
+            Write-Host "Using $($asset.Exe) $($asset.Version)."
+            continue
+        }
+        Write-Host "Installing the validated release $($asset.Version) for $($asset.Exe)."
+    }
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$($asset.Repo)/releases/tags/$($asset.Tag)"
+    $metadata = $release.assets | Where-Object name -eq $asset.Name | Select-Object -First 1
+    if (!$metadata -or $metadata.digest -notmatch '^sha256:[a-f0-9]{64}$') { throw "Missing release hash for $($asset.Name)" }
+    $installer = Join-Path $download $asset.Name
+    Invoke-WebRequest -UseBasicParsing -Uri $metadata.browser_download_url -OutFile $installer
+    if (('sha256:' + (Get-FileHash -LiteralPath $installer).Hash) -ne $metadata.digest -or
+        (Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'Valid') { throw "Signature or hash check failed for $installer" }
+    if ($installer.EndsWith('.msi')) {
+        $result = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList "/i `"$installer`" /norestart" -Wait -PassThru
+    } else {
+        $result = Start-Process -FilePath $installer -ArgumentList '/NORESTART' -Wait -PassThru
+    }
+    if ($result.ExitCode -notin @(0, 3010)) { throw "$($asset.Name) returned $($result.ExitCode)" }
+    if ($result.ExitCode -eq 3010 -or $installer.EndsWith('.exe')) { Write-Host 'Reboot Windows when convenient before hardware verification.' }
+}
+
+if (!$KeepStockUsbipRule) {
+    Get-NetFirewallRule -DisplayName usbipd -ErrorAction SilentlyContinue | Disable-NetFirewallRule
+}
+if ($PeerSources.Count -gt 0) {
+    $old = Get-NetFirewallRule -Name 'AnyUSB-Peer' -ErrorAction SilentlyContinue
+    if ($old) { throw 'An AnyUSB-Peer firewall rule already exists. Review the existing scope.' }
+    New-NetFirewallRule -Name 'AnyUSB-Peer' -DisplayName 'AnyUSB peer HTTPS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47443 -RemoteAddress $PeerSources | Out-Null
+}
+
+$destination = Join-Path $env:ProgramFiles 'AnyUSB'
+$data = Join-Path $env:ProgramData 'AnyUSB'
+foreach ($directory in @($destination, $data)) {
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    if ((Get-Item -LiteralPath $directory -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing reparse point $directory" }
+    & icacls.exe $directory /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Failed to protect $directory" }
+}
+Copy-Item -LiteralPath (Join-Path $build 'anyusbd.exe'), (Join-Path $build 'anyusb.exe') -Destination $destination
+$binary = '"' + (Join-Path $destination 'anyusbd.exe') + '"'
+if ($Python) {
+    $pythonPath = (Resolve-Path -LiteralPath $Python).Path
+    $machineDir = [IO.Path]::GetFullPath($env:ProgramFiles) + '\'
+    if (!$pythonPath.StartsWith($machineDir, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Supply a machine-wide Python environment under Program Files for use by the system service.'
+    }
+    $version = & $pythonPath -m esptool version
+    if ($LASTEXITCODE -ne 0 -or $version -notcontains '5.2.0') { throw 'The selected Python does not have esptool 5.2.0.' }
+    $binary += ' -python "' + $pythonPath + '"'
+}
+New-Service -Name anyusbd -DisplayName 'AnyUSB Agent' -BinaryPathName $binary -StartupType Automatic | Out-Null
+Start-Service -Name anyusbd
+& (Join-Path $destination 'anyusb.exe') doctor

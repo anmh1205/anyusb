@@ -1,12 +1,15 @@
 [Unit]
 Description=AnyUSB local USB/IP agent
-After=systemd-modules-load.service
+After=systemd-modules-load.service anyusb-usbipd.service
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/anyusbd
+EnvironmentFile=-/etc/default/anyusbd
+ExecStart=/usr/local/bin/anyusbd $ANYUSB_AGENT_ARGS
 RuntimeDirectory=anyusb
 RuntimeDirectoryMode=0700
+StateDirectory=anyusb
+StateDirectoryMode=0700
 UMask=0077
 Restart=on-failure
 
