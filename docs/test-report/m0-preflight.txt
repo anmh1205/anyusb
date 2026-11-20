@@ -1,0 +1,93 @@
+AnyUSB M0 preflight, 2026-11-20 (Asia/Saigon)
+Selected output from read-only checks. Local absolute paths and the guest IP are omitted.
+
+WINDOWS 11
+
+> Get-CimInstance Win32_OperatingSystem
+> Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+OS=Microsoft Windows 11 Pro DisplayVersion=24H2 Build=26100.8037 Arch=AMD64
+
+> Get-Command usbipd,usbip -ErrorAction SilentlyContinue
+[no matches]
+
+> sc.exe query usbipd
+> sc.exe query VBoxUSBMon
+> sc.exe query usbip2_ude
+> sc.exe query usbip2_filter
+[each returned] [SC] EnumQueryServicesStatus:OpenService FAILED 1060:
+The specified service does not exist as an installed service.
+
+> [Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | Where-Object Port -eq 3240
+[no matches]
+
+> Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match 'VID_(10C4|1A86|303A)|USBIP|VHCI' -or $_.Class -eq 'Ports' } | Select-Object Status,Class,FriendlyName,InstanceId
+OK    Ports    ECP Printer Port (LPT1)     ACPI\PNP0401\0
+OK    Ports    Communications Port (COM1) ACPI\PNP0501\0
+
+> python --version
+Python 3.11.9
+> python -m esptool version
+esptool v5.2.0
+5.2.0
+
+> Get-Service -Name Tailscale
+Tailscale Running Automatic
+> tailscale version
+1.104.6
+
+LINUX ENDPOINT
+
+> wsl.exe --list --verbose
+Windows Subsystem for Linux has no installed distributions.
+
+> vmrun.exe -T ws list
+Total running VMs: 1
+[local path omitted]\Ubuntu 64-bit.vmx
+> vmrun.exe -T ws checkToolsState <Ubuntu VMX path>
+running
+> vmrun.exe -T ws getGuestIPAddress <Ubuntu VMX path>
+[NAT guest IP omitted]
+> $probe = [Net.Sockets.TcpClient]::new()
+> $probe.ConnectAsync($guestIP,22).Wait(3000)
+> $probe.Connected
+[the original probe printed] Ubuntu SSH TCP/22 reachable
+
+RELEASE PACKAGE CHECKS (x64)
+
+> Get-FileHash -LiteralPath usbipd-win_5.3.0_x64.msi
+1C984914AEC944DE19B64EFF232421439629699F8138E3DDC29301175BC6D938
+> Get-AuthenticodeSignature -LiteralPath usbipd-win_5.3.0_x64.msi
+Valid | Signature verified. | Open Source Developer, Frans van Dorsselaer
+
+> 7z x -o<scratch> -y usbipd-win_5.3.0_x64.msi 'VBoxUSB*' 'Drivers_README.md'
+> signtool.exe verify /kp /v VBoxUSB.cat
+Successfully verified: VBoxUSB.cat
+> signtool.exe verify /kp /v /c VBoxUSB.cat VBoxUSB.sys
+Successfully verified: VBoxUSB.sys
+> signtool.exe verify /kp /c VBoxUSB.cat VBoxUSB.inf
+Successfully verified: VBoxUSB.inf
+> signtool.exe verify /kp /v /c VBoxUSB.cat VBoxUSBMon.sys
+SignTool Error: File not found in the specified catalog.
+> signtool.exe verify /kp /v VBoxUSBMon.sys
+Signature Index: 0 (Primary Signature)
+SignTool Error: Signing Cert does not chain to a Microsoft Root Cert.
+> signtool.exe verify /pa /all /v VBoxUSBMon.sys
+Signature Index: 0 (Primary Signature)
+Issued to: Oracle America, Inc.
+Signature Index: 1
+Issued to: Microsoft Windows Hardware Compatibility Publisher
+Number of signatures successfully Verified: 2
+Number of errors: 0
+
+> Get-FileHash -LiteralPath USBip-0.9.8.1-x64.exe
+38CAD6D4432B52D5BB9409D9AD03B72FDFC4ADA4CD3A48FBECA1A2752A8518A
+> Get-AuthenticodeSignature -LiteralPath USBip-0.9.8.1-x64.exe
+Valid | Signature verified. | Cloudyne Systems (Scheibling Consulting AB)
+
+Microsoft Hardware Certification Report 1152921505701981546, linked by the release:
+Approved
+Product name: USBIP_WIN2_HLK_20260926-1450_25H2
+Certified for Microsoft Windows 11 Client family version 25H2, x64
+
+The release artifacts were inspected outside the repository. No installer, driver,
+guest, or network configuration was changed during these checks.
