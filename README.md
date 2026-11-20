@@ -1,18 +1,19 @@
 # AnyUSB
 
-Share USB devices between Windows and Linux over LAN or Tailscale. AnyUSB will
-orchestrate existing USB/IP backends and run remote ESP operations on the host
-with the physical board. Android is planned for a later phase.
-
-M1 provides the Linux host and client adapter, the `anyusbd` agent, and the
-`anyusb` CLI. See the [architecture](docs/architecture.md) and
-[M0 hardware report](docs/test-report/m0.md) for the wider plan and current
-hardware verification status.
+Share USB devices between Windows and Linux over LAN or Tailscale. AnyUSB
+orchestrates native USB/IP backends and runs remote ESP operations on the
+computer with the physical board.
 
 ## Build
 
-Use Go 1.24 or newer. Build on Linux, or set `GOOS=linux`, `GOARCH=amd64` or
-`arm64`, and `CGO_ENABLED=0` when cross-compiling.
+Use Go 1.24 or newer.
+
+```powershell
+.\scripts\build.ps1
+```
+
+The script builds `anyusbd` and `anyusb` for Linux and Windows on amd64 and arm64
+under `dist/`. On Linux, build the current architecture with:
 
 ```sh
 mkdir -p dist
@@ -20,51 +21,88 @@ go build -trimpath -o dist/anyusbd ./agent/cmd/anyusbd
 go build -trimpath -o dist/anyusb ./cli
 ```
 
-## Run on Linux
-
-Install the distribution's USB/IP tooling for the running kernel. A host needs
-`usbip-host` and its stock `usbipd` daemon. A client needs `vhci-hcd`. Follow
-the [lab setup](docs/test-report/m0-lab.md) for module and backend commands.
-Use a trusted lab network with restricted TCP 3240 access for sharing.
-
-Start the agent in one terminal and use the CLI from another.
+## Install on Linux
 
 ```sh
-sudo ./dist/anyusbd
-sudo ./dist/anyusb doctor
-sudo ./dist/anyusb list
+sudo sh scripts/install-linux.sh dist/linux-amd64
+sudo anyusb doctor
 ```
 
-The CLI uses a root-only Unix socket at `/run/anyusb/control.sock`. Both
-commands accept `-socket PATH` before positional arguments. If the USB/IP tool
-is outside the service's `PATH`, start `anyusbd` with `-usbip /path/to/usbip`.
-A [systemd unit](scripts/systemd/anyusbd.service) is available for deployments
-that place `anyusbd` in `/usr/local/bin`.
+Ubuntu needs USB/IP utilities and modules matching its running kernel. Debian
+uses the `usbip` package. The installer offers a separate loopback-restricted
+stock `usbipd` service, installs esptool 5.2.0 in a venv, and enables the agent.
+Add `--client-only` to skip the host module and daemon.
 
-### Host
+## Install on Windows
 
-Replace `1-2` with the physical device's current busid or the port-based ID
-from `anyusb list`.
+Run an elevated PowerShell.
 
-```sh
-sudo ./dist/anyusb share 1-2
-sudo ./dist/anyusb unshare 1-2
+```powershell
+.\scripts\install-windows.ps1 -BuildDirectory .\dist\windows-amd64
+& "$env:ProgramFiles\AnyUSB\anyusb.exe" doctor
 ```
 
-### Client
+The script previews the driver packages and prompts for consent before launching
+the signed upstream installers. Reboot if requested. For Remote ESP, install
+`scripts/esptool-requirements.txt` into a machine-wide Python environment under
+Program Files and pass its interpreter path with `-Python`. Use `-PeerSources`
+to enable an inbound Windows Firewall rule scoped to the intended peer addresses.
 
-Replace `usb-host` and `1-2` with the remote host and an exported busid. Use
-the virtual port from `connect` or `list --imports` when disconnecting.
+## Pair and share
 
-```sh
-sudo ./dist/anyusb list --remote usb-host
-sudo ./dist/anyusb connect usb-host 1-2
-sudo ./dist/anyusb list --imports
-sudo ./dist/anyusb disconnect 0
+Use an elevated terminal on Windows or `sudo` on Linux. On the host, list
+physical devices, choose one, and generate a one-time code.
+
+```text
+anyusb list
+anyusb share --managed DEVICE
+anyusb pair invite
 ```
 
-`anyusb watch` streams local hardware and export changes as NDJSON.
-`anyusb -json list --imports` returns structured inventory, including the
-serial device nodes that are available at the time of the call. This milestone
-uses explicit share/connect operations. Peer pairing, leases, automatic
-reconnect, and remote ESP tooling are later milestones.
+On the client, pair by LAN or Tailscale address or run `anyusb discover` on the
+LAN. Use the peer ID from `anyusb peers` and the device ID from the remote list.
+
+```text
+anyusb pair HOST CODE
+anyusb peers
+anyusb list --peer PEER
+anyusb connect --peer PEER DEVICE
+anyusb list --connections
+anyusb disconnect --lease LEASE
+```
+
+Keep TCP 47443 reachable only by the intended networks. Stock USB/IP on TCP
+3240 runs separately. Managed exports require that TCP 3240 be accessible to
+the agent on loopback and blocked from peer machines. Allow TCP 3240 on a
+designated test network for stock-tool interoperability. The original raw
+`list --remote`, `share`, `connect HOST BUSID` and `disconnect VHCI_PORT`
+commands remain available for that workflow.
+
+Foreground options include `-socket`, `-data`, `-usbip`, `-usbipd`, `-python`,
+`-peer-listen`, `-advertise`, and `-backend`. `-advertise` accepts a MagicDNS
+name or host address for pairing in both directions. Local control uses a
+root-only Unix socket or administrator-only named pipe. Run `anyusb ui` and
+open the authorized loopback URL in a browser.
+
+## Remote ESP
+
+Use a managed shared ESP device. Disconnect its USB/IP lease before starting
+an ESP operation. The host opens the serial port and runs the pinned esptool.
+
+```text
+anyusb chip-id PEER DEVICE
+anyusb flash PEER DEVICE --idf build/flasher_args.json
+anyusb flash PEER DEVICE 0x0=bootloader.bin 0x10000=app.bin
+anyusb verify PEER DEVICE --idf build/flasher_args.json
+anyusb reset PEER DEVICE
+anyusb monitor PEER DEVICE --baud 115200
+```
+
+Use `--port` for a board with multiple host serial interfaces. The web UI
+supports firmware selection, flash progress, serial input, baud, DTR and RTS.
+The host reserves the device until a running ESP operation finishes.
+
+See the [architecture](docs/architecture.md), [peer API](docs/api/openapi.json),
+[software verification](docs/test-report/phase1-software.md), and
+[hardware matrix](docs/test-report/m0.md). Phase 1 hardware acceptance
+requires the Linux and Windows backends plus both physical ESP32-S3 interfaces.

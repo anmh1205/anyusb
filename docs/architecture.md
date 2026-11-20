@@ -1,7 +1,8 @@
 # AnyUSB architecture
 
 **Phase 1 design.** The [M0 report](test-report/m0.md) records the evidence and
-open hardware checks. M1 implements the Linux backend, local agent API and CLI.
+open hardware checks. The builds carry the Linux and Windows backends, peer
+control plane, Remote ESP operations, local web UI and CLI.
 
 ## Components and interfaces
 
@@ -17,8 +18,10 @@ flowchart LR
     CLI[Local CLI and web UI] --> C[Client anyusbd]
     C <-->|Mutual TLS, HTTPS and WebSocket| H[Host anyusbd]
     C --> V[Client USB/IP virtual controller]
-    V <-->|Standard USB/IP on TCP 3240| S[Host USB/IP backend]
-    H --> S
+    V <-->|USB/IP on loopback| R[Client relay]
+    R <-->|Lease-authorized binary WebSocket| H
+    H <-->|USB/IP on loopback TCP 3240| S[Host USB/IP backend]
+    T[Stock USB/IP client] -.->|Direct TCP 3240 on trusted lab network| S
     H --> E[Local esptool and serial service]
     S --> U[Physical USB device]
     E --> U
@@ -29,13 +32,13 @@ flowchart LR
 | Linux | `usbip-host`, `usbipd`, `usbip bind` and `usbip unbind` | `vhci_hcd`, `usbip list --remote`, `usbip attach`, `usbip port`, `usbip detach` | sysfs topology, udev notifications and inventory reconciliation |
 | Windows | `usbipd-win` service, `usbipd bind`, `usbipd unbind` | `usbip-win2` UDE, `usbip.exe list`, `attach`, `port`, `detach` | `usbipd state` JSON, PnP location paths and device notifications |
 
-M1 polls Linux sysfs for inventory changes once per second. The local HTTP API
-uses a root-only Unix socket, with no TCP listener. It serves device and import
+The agent polls Linux sysfs or Windows PnP for inventory changes. The native
+local API uses a root-only Unix socket or administrator-only named pipe. It serves device and import
 snapshots, share and unshare, connect and disconnect, diagnostics, and a
 newline-delimited JSON event stream. Mutations are serialized across callers.
 The native `usbipd` remains a separate service. The M1 agent neither starts it
-nor changes firewall rules. The table's udev notifications, Windows adapter and
-remote control plane describe later milestones.
+nor changes firewall rules. The loopback UI exposes the same operations through
+an ephemeral bearer token and same-origin checks.
 
 The adapter exposes `ListLocalDevices`, `Export`, `Unexport`, `ListRemote`,
 `Attach`, `Detach`, and `WatchHotplug`. Use typed state for inventory, errors,
@@ -85,14 +88,12 @@ node allowlist when network identity is stable and verified. Tailscale grants
 protect the tailnet path. Standard USB/IP carries USB traffic without its own
 encryption. Pairing alone grants no access to TCP 3240. [Debian usbipd manual](https://manpages.debian.org/bookworm/usbip/usbipd.8.en.html), [Windows installer rule](https://github.com/dorssel/usbipd-win/blob/v5.3.0/Installer/Server.wxs), [Windows AutoBind policy](https://github.com/dorssel/usbipd-win/wiki/New-design:-policies), [Tailscale grants](https://tailscale.com/docs/features/access-control/grants)
 
-On the direct TCP path, two allowed nodes can race for an export before either
-imports it. Backend exclusivity limits simultaneous imports. It cannot enforce
-which node wins. Test stock-tool interoperability on a designated trusted test
-network. Before enabling managed passthrough on a shared network, settle the
-access policy at M3. Strict per-device enforcement with simultaneous leases for
-different peers would require a per-import enforcement point or isolated paths.
-Keep the USB/IP wire protocol intact for stock clients. A typed lease error is
-available from the AnyUSB API. [USB/IP import request](https://docs.kernel.org/usb/usbip_protocol.html#protocol)
+Managed imports use a mutually authenticated tunnel and validate the first
+import request against the leased busid. Block direct network access to TCP
+3240 for managed deployments. Test stock-tool interoperability on a designated
+trusted network where direct access is intentional. See the
+[managed import ADR](adr/0005-managed-usbip-tunnel.md).
+[USB/IP import request](https://docs.kernel.org/usb/usbip_protocol.html#protocol)
 
 ## Identity and recovery
 

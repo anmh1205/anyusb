@@ -9,15 +9,15 @@ loopback and independently authorized. Publish an OpenAPI document for REST
 operations and a versioned WebSocket message schema with examples. This serves
 Go, browser and future Kotlin clients without requiring a browser RPC proxy.
 
-The host holds a long-lived key pair. A short, one-time code authorizes a
-password-authenticated key exchange such as SPAKE2 using a reviewed library. Bind
+The host holds a long-lived key pair. A short, one-time code authorizes the
+Ristretto255 CPace exchange implemented by `filippo.io/cpace`. Bind
 both identity keys, roles, and the pairing session to authenticated confirmation
 over the resulting key before either side persists a peer. Pairing requires
 explicit local initiation, expiry, and attempt limits. Consume the session on
 success or exhaustion. Subsequent HTTPS and WSS sessions use mutual TLS and
 accept only pinned peer identities. Revocation removes trust and blocks new
 operations. mDNS and manually entered addresses supply endpoint hints only.
-[SPAKE2 protocol and key confirmation](https://www.rfc-editor.org/rfc/rfc9382.html)
+[CPace Go package](https://filippo.io/cpace)
 
 Send device and lease snapshots with a host epoch and revision. Number events
 within each epoch. On a gap or epoch change, reload the snapshot before acting.

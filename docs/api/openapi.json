@@ -1,0 +1,861 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AnyUSB peer API",
+    "version": "1.0.0",
+    "description": "Peer control API on TCP 47443. Pairing uses the TLS client certificate to bind the CPace exchange. All other endpoints require a certificate pinned by the trusted peer store. WebSocket frames and the USB/IP tunnel are described in websocket.md."
+  },
+  "servers": [
+    {
+      "url": "https://{host}:47443",
+      "variables": {
+        "host": {
+          "default": "localhost"
+        }
+      }
+    }
+  ],
+  "security": [
+    {
+      "peerCertificate": []
+    }
+  ],
+  "paths": {
+    "/v1/pair/info": {
+      "get": {
+        "summary": "Read the server certificate from the TLS connection",
+        "operationId": "get_v1_pair_info",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/pair/start": {
+      "post": {
+        "summary": "Submit a CPace share during an active invitation",
+        "operationId": "post_v1_pair_start",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "session",
+                    "share",
+                    "proof",
+                    "name"
+                  ],
+                  "properties": {
+                    "session": {
+                      "type": "string"
+                    },
+                    "share": {
+                      "type": "string",
+                      "contentEncoding": "base64"
+                    },
+                    "proof": {
+                      "type": "string",
+                      "contentEncoding": "base64"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "share"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "endpoint": {
+                    "type": "string"
+                  },
+                  "share": {
+                    "type": "string",
+                    "contentEncoding": "base64"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/pair/finish": {
+      "post": {
+        "summary": "Confirm the peer and consume the invitation",
+        "operationId": "post_v1_pair_finish",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "session",
+                  "proof"
+                ],
+                "properties": {
+                  "session": {
+                    "type": "string"
+                  },
+                  "proof": {
+                    "type": "string",
+                    "contentEncoding": "base64"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/v1/shared": {
+      "get": {
+        "summary": "List shared devices and lease holders",
+        "operationId": "get_v1_shared",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Device"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "summary": "Watch host events",
+        "operationId": "get_v1_events",
+        "responses": {
+          "101": {
+            "description": "Upgraded to WebSocket"
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/leases": {
+      "post": {
+        "summary": "Acquire a managed USB/IP lease",
+        "operationId": "post_v1_leases",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Lease"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "device"
+                ],
+                "properties": {
+                  "device": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/leases/{id}": {
+      "put": {
+        "summary": "Renew the current USB/IP lease",
+        "operationId": "put_v1_leases_id_",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Lease"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Release a lease and begin detach cleanup",
+        "operationId": "delete_v1_leases_id_",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/tunnel/{id}": {
+      "get": {
+        "summary": "Forward a leased USB/IP import",
+        "operationId": "get_v1_tunnel_id_",
+        "responses": {
+          "101": {
+            "description": "Upgraded to WebSocket"
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/esp/{device}/jobs": {
+      "post": {
+        "summary": "Start a host-local esptool job",
+        "operationId": "post_v1_esp_device_jobs",
+        "responses": {
+          "202": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Job"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "device",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "op",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "chip-id",
+                "erase",
+                "flash",
+                "verify",
+                "reset"
+              ]
+            }
+          },
+          {
+            "name": "baud",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "port",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Required for flash and verify only. The manifest field is JSON and each files part is binary with a logical file name matching the manifest.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "manifest",
+                  "files"
+                ],
+                "properties": {
+                  "manifest": {
+                    "$ref": "#/components/schemas/FlashManifest"
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/esp/{device}/monitor": {
+      "get": {
+        "summary": "Open an exclusive serial monitor",
+        "operationId": "get_v1_esp_device_monitor",
+        "responses": {
+          "101": {
+            "description": "Upgraded to WebSocket"
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "device",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "baud",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "port",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "summary": "Get job status and retained logs",
+        "operationId": "get_v1_jobs_id_",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobFrame"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/jobs/{id}/logs": {
+      "get": {
+        "summary": "Stream job progress and terminal status",
+        "operationId": "get_v1_jobs_id_logs",
+        "responses": {
+          "101": {
+            "description": "Upgraded to WebSocket"
+          },
+          "default": {
+            "description": "Request, trust, lease, or backend error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "peerCertificate": {
+        "type": "mutualTLS"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Device": {
+        "type": "object",
+        "required": [
+          "id",
+          "present"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "bus_id": {
+            "type": "string"
+          },
+          "vendor_id": {
+            "type": "string"
+          },
+          "product_id": {
+            "type": "string"
+          },
+          "serial": {
+            "type": "string"
+          },
+          "manufacturer": {
+            "type": "string"
+          },
+          "product": {
+            "type": "string"
+          },
+          "port_path": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "exported": {
+            "type": "boolean"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "lease_owner": {
+            "type": "string"
+          },
+          "lease_mode": {
+            "enum": [
+              "usbip",
+              "esp"
+            ]
+          }
+        }
+      },
+      "Lease": {
+        "type": "object",
+        "required": [
+          "id",
+          "device",
+          "owner",
+          "mode",
+          "expires",
+          "online",
+          "closing"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "mode": {
+            "const": "usbip"
+          },
+          "bus_id": {
+            "type": "string"
+          },
+          "expires": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "online": {
+            "type": "boolean"
+          },
+          "closing": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Job": {
+        "type": "object",
+        "required": [
+          "id",
+          "device",
+          "operation",
+          "status",
+          "started"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          },
+          "operation": {
+            "enum": [
+              "chip-id",
+              "erase",
+              "flash",
+              "verify",
+              "reset"
+            ]
+          },
+          "status": {
+            "enum": [
+              "running",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "started": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "exit_code": {
+            "type": "integer"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "Log": {
+        "type": "object",
+        "required": [
+          "number",
+          "stream",
+          "text"
+        ],
+        "properties": {
+          "number": {
+            "type": "integer"
+          },
+          "stream": {
+            "enum": [
+              "stdout",
+              "stderr"
+            ]
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "JobFrame": {
+        "type": "object",
+        "required": [
+          "job"
+        ],
+        "properties": {
+          "job": {
+            "$ref": "#/components/schemas/Job"
+          },
+          "logs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Log"
+            }
+          }
+        }
+      },
+      "Event": {
+        "type": "object",
+        "required": [
+          "epoch",
+          "seq",
+          "type"
+        ],
+        "properties": {
+          "epoch": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "device": {
+            "type": "string"
+          }
+        }
+      },
+      "FlashManifest": {
+        "type": "object",
+        "required": [
+          "flash_files"
+        ],
+        "properties": {
+          "flash_files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "flash_settings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "extra_esptool_args": {
+            "type": "object",
+            "properties": {
+              "chip": {
+                "type": "string"
+              },
+              "before": {
+                "type": "string"
+              },
+              "after": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

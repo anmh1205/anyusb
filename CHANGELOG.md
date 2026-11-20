@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added the Windows service and usbipd-win and usbip-win2 adapters.
+- Added TLS peer identity, code pairing, LAN discovery, managed USB/IP
+  leases, tunnel authorization, and reconnection.
+- Added host-side ESP jobs, firmware upload, live logs, and serial monitoring.
+- Added the loopback UI, build script, and driver-aware installation scripts.
+
 - Added the Linux USB/IP agent and CLI with sysfs inventory, share and unshare,
   remote listing, attach and detach, a local hotplug stream, and diagnostics.
 - Added a Linux systemd unit and build instructions for the agent and CLI.
