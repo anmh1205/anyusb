@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Kept active managed USB/IP imports through brief lease-renewal interruptions.
+  A new import still requires a confirmed lease and current bus ID.
 - Fixed intermittent Linux attach failures when `usbip port` cannot yet read
   the new VHCI import, and a Windows PowerShell PnP inventory error with a
   single device ID.

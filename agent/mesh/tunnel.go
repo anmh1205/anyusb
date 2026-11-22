@@ -17,6 +17,7 @@ import (
 )
 
 const tunnelProtocol = "anyusb-usbip-v1"
+const leaseRenewGrace = 6 * time.Second
 
 func (n *Node) serveTunnel(w http.ResponseWriter, r *http.Request, owner, token string) {
 	n.mu.Lock()
@@ -233,8 +234,9 @@ func (n *Node) followLease(ctx context.Context, session *connection, client *htt
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	lastRenewed := time.Now()
+	canAttach := true
 	for {
-		state, imported, err := n.ensureImport(ctx, address, port, le)
+		state, imported, err := n.ensureImport(ctx, address, port, le, canAttach)
 		n.setConnection(session, state, imported, err)
 		select {
 		case <-ctx.Done():
@@ -247,12 +249,20 @@ func (n *Node) followLease(ctx context.Context, session *connection, client *htt
 		if err == nil {
 			le = current
 			lastRenewed = time.Now()
+			canAttach = true
 			continue
 		}
-		if time.Since(lastRenewed) >= leaseTTL || isHTTPStatus(err, http.StatusNotFound) || isHTTPStatus(err, http.StatusForbidden) {
+		unconfirmed := time.Since(lastRenewed)
+		if unconfirmed >= leaseTTL || isHTTPStatus(err, http.StatusNotFound) ||
+			isHTTPStatus(err, http.StatusForbidden) || isHTTPStatus(err, http.StatusUnauthorized) {
 			return
 		}
-		le.Online = false
+		// An existing USB stream may recover through TCP retransmission. A new
+		// import still requires a successful renewal and the current busid.
+		canAttach = false
+		if unconfirmed >= leaseRenewGrace {
+			le.Online = false
+		}
 	}
 }
 
@@ -260,7 +270,7 @@ func localTunnel(imported platform.Import, port string) bool {
 	return (imported.RemoteHost == "127.0.0.1" || strings.EqualFold(imported.RemoteHost, "localhost")) && imported.RemotePort == port
 }
 
-func (n *Node) ensureImport(ctx context.Context, address, port string, le Lease) (string, *platform.Import, error) {
+func (n *Node) ensureImport(ctx context.Context, address, port string, le Lease, canAttach bool) (string, *platform.Import, error) {
 	imports, err := n.adapter.ListImports(ctx)
 	if err != nil {
 		return "lost", nil, err
@@ -276,7 +286,7 @@ func (n *Node) ensureImport(ctx context.Context, address, port string, le Lease)
 			return "lost", nil, err
 		}
 	}
-	if !le.Online || le.BusID == "" {
+	if !canAttach || !le.Online || le.BusID == "" {
 		return "lost", nil, nil
 	}
 	imported, err := n.adapter.Attach(ctx, address, le.BusID)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -280,5 +281,63 @@ func TestTunnelImportHeader(t *testing.T) {
 	good[3] = 5
 	if validImport(good, "1-4") {
 		t.Fatal("accepted a non-import request")
+	}
+}
+
+func TestFollowLeaseKeepsImportThroughTemporaryRenewalFailure(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	host, port, _ := net.SplitHostPort(listener.Addr().String())
+	lease := Lease{ID: "test", BusID: "1-4", Online: true}
+	imported := platform.Import{Port: 3, RemoteHost: host, RemotePort: port, RemoteBusID: lease.BusID}
+	adapter := &testAdapter{imported: &imported}
+	node := &Node{adapter: adapter}
+
+	var renewals atomic.Int32
+	retried := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		switch renewals.Add(1) {
+		case 1:
+			problem(w, failure(http.StatusServiceUnavailable, "temporary renewal failure"))
+		case 2:
+			close(retried)
+			jsonResponse(w, http.StatusOK, lease)
+		default:
+			problem(w, failure(http.StatusUnauthorized, "peer revoked"))
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	session := &connection{
+		Connection: Connection{ID: lease.ID},
+		peer:       Peer{Endpoint: server.Listener.Addr().String()},
+		listener:   listener,
+		cancel:     cancel,
+		done:       make(chan struct{}),
+	}
+	go node.followLease(ctx, session, server.Client(), lease)
+	select {
+	case <-retried:
+	case <-time.After(5 * time.Second):
+		t.Fatal("client did not retry the lease renewal")
+	}
+	if imports, err := adapter.ListImports(ctx); err != nil || len(imports) != 1 || imports[0].Port != imported.Port {
+		t.Fatalf("temporary failure lost the import: %v, %v", imports, err)
+	}
+	select {
+	case <-session.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client kept the lease after receiving an explicit rejection")
+	}
+	if imports, err := adapter.ListImports(t.Context()); err != nil || len(imports) != 0 {
+		t.Fatalf("rejected lease kept an import: %v, %v", imports, err)
 	}
 }

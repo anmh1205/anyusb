@@ -18,3 +18,9 @@ The host tracks the live incarnation and exports the returning approved
 device. The client renews every second, checks its native virtual port, and
 retries on the current busid while the lease is valid. Hardware recovery time
 remains an acceptance measurement.
+
+After a temporary renewal failure, the client preserves the existing import
+while the last successful renewal is less than six seconds old. A new import
+requires a fresh confirmation. The client tears down the session immediately
+when the peer rejects the lease or authorization, and otherwise ends it when
+the lease expires.
