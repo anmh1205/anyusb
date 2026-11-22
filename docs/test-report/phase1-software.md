@@ -25,6 +25,9 @@ The first pairing test caught the responder's CPace share and key being
 assigned in the wrong order. The corrected exchange passed the repeated
 integration and race tests.
 
+The [virtual USB lab](virtual-usb-lab.md) records follow-up kernel USB/IP,
+serial, and Windows PnP checks from 2026-11-22.
+
 ## Hardware acceptance
 
 **UNVERIFIED.** The Windows inventory exposed a legacy COM1 only. The service

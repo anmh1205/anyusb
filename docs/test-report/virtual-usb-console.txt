@@ -1,0 +1,52 @@
+AnyUSB isolated USB kernel lab
+/bin/kmod
+Loaded USB modules:
+Module                  Size  Used by
+vhci_hcd               57344  0
+usbip_host             45056  0
+usbip_core             36864  2 usbip_host,vhci_hcd
+cdc_acm                49152  0
+usb_f_acm              20480  0
+u_serial               32768  1 usb_f_acm
+libcomposite          106496  1 usb_f_acm
+configfs               69632  3 libcomposite,usb_f_acm
+dummy_hcd              49152  0
+udc_core               98304  4 u_serial,dummy_hcd,libcomposite,usb_f_acm
+usbcore               409600  4 cdc_acm,dummy_hcd,usbip_host,vhci_hcd
+usb_common             16384  6 usbip_core,usbcore,dummy_hcd,libcomposite,udc_core,vhci_hcd
+Kernel 6.12.117+deb13-amd64
+usbip (usbip-utils 2.0)
+usbipd (usbip-utils 2.0)
+Guest esptool: esptool v5.2.0
+5.2.0
+CDC enumeration: bus=1-1, id=e944187aceb9583674a1c7444f08f9ec, ttyGS0, incarnation=1-1/2
+PASS real loopback HTTP UI served assets, rejected unauthenticated API, listed the CDC device
+[   57.769912] usbip-host 1-1: recv a header, 0
+PASS stock usbipd raw attach, binary transfer in both directions, detach on /dev/ttyACM0
+PASS managed TLS USB/IP attach and two-way binary CDC data on /dev/ttyACM0
+PASS second paired peer blocked by active lease
+[   64.896505] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 01: 5479 ms to bidirectional data, bus=1-1 incarnation=1-1/3 tty=/dev/ttyACM0
+[   71.567808] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 02: 4328 ms to bidirectional data, bus=1-1 incarnation=1-1/4 tty=/dev/ttyACM0
+[   77.570493] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 03: 4505 ms to bidirectional data, bus=1-1 incarnation=1-1/5 tty=/dev/ttyACM0
+[   83.350757] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 04: 3758 ms to bidirectional data, bus=1-1 incarnation=1-1/6 tty=/dev/ttyACM0
+[   88.323391] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 05: 3442 ms to bidirectional data, bus=1-1 incarnation=1-1/7 tty=/dev/ttyACM0
+[   93.041017] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 06: 5369 ms to bidirectional data, bus=1-1 incarnation=1-1/8 tty=/dev/ttyACM0
+[  100.308036] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 07: 5022 ms to bidirectional data, bus=1-1 incarnation=1-1/9 tty=/dev/ttyACM0
+[  107.617770] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 08: 5480 ms to bidirectional data, bus=1-1 incarnation=1-1/10 tty=/dev/ttyACM0
+[  115.406054] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 09: 4822 ms to bidirectional data, bus=1-1 incarnation=1-1/11 tty=/dev/ttyACM0
+[  122.447275] usbip-host 1-1: recv a header, 0
+PASS virtual CDC replug 10: 3689 ms to bidirectional data, bus=1-1 incarnation=1-1/12 tty=/dev/ttyACM0
+[  127.936140] usbip-host 1-1: recv a header, 0
+PASS real AnyUSB CLI Remote ESP monitor over paired WebSocket, pySerial and kernel CDC TTY in both directions; lease released
+LAB PASS complete
+AnyUSB LAB RESULT=0
+[  130.135156] reboot: Power down
