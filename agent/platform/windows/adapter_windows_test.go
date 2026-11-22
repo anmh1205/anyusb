@@ -1,6 +1,11 @@
 package windows
 
-import "testing"
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestWin2PortInventory(t *testing.T) {
 	out := "Imported USB devices\r\n====================\r\n" +
@@ -21,5 +26,39 @@ func TestWin2PortInventory(t *testing.T) {
 	}
 	if empty, err := parseImports(""); err != nil || len(empty) > 0 {
 		t.Fatalf("empty imports = %v, %v", empty, err)
+	}
+}
+
+func TestPowerShellPnPInstanceIDs(t *testing.T) {
+	const fixture = `
+function Get-PnpDevice { param($Class, [switch]$PresentOnly) }
+function Get-PnpDeviceProperty {
+    [CmdletBinding()]
+    param([ValidateNotNullOrEmpty()][string]$InstanceId, [string]$KeyName)
+    [pscustomobject]@{Data=''}
+}
+`
+	powerShell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+	for _, ids := range [][]string{nil, {}, {"USB\\VID_1209&PID_A11B\\ONE"}, {"a", "b"}} {
+		payload, err := json.Marshal(ids)
+		if err != nil {
+			t.Fatal(err)
+		}
+		output, err := run(t.Context(), "PowerShell PnP", powerShell, payload, "-NoProfile", "-NonInteractive", "-Command", fixture+pnpScript)
+		if err != nil {
+			t.Fatalf("PnP %v: %v", ids, err)
+		}
+		var devices []pnpDevice
+		if err := json.Unmarshal([]byte(output), &devices); err != nil {
+			t.Fatalf("PnP %v: %v (%s)", ids, err, output)
+		}
+		if len(devices) != len(ids) {
+			t.Fatalf("PnP %v returned %+v", ids, devices)
+		}
+		for i, id := range ids {
+			if devices[i].InstanceID != id {
+				t.Fatalf("PnP InstanceID = %q, want %q", devices[i].InstanceID, id)
+			}
+		}
 	}
 }

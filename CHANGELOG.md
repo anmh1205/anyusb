@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fixed intermittent Linux attach failures when `usbip port` cannot yet read
+  the new VHCI import, and a Windows PowerShell PnP inventory error with a
+  single device ID.
 - Added the Windows service and usbipd-win and usbip-win2 adapters.
 - Added TLS peer identity, code pairing, LAN discovery, managed USB/IP
   leases, tunnel authorization, and reconnection.

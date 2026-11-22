@@ -99,7 +99,7 @@ type pnpDevice struct {
 const pnpScript = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$ids = @([Console]::In.ReadToEnd() | ConvertFrom-Json)
+$ids = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $com = @(Get-PnpDevice -Class Ports -PresentOnly -ErrorAction SilentlyContinue)
 $parents = @{}
 function Test-Win2Ancestry([string] $id) {
@@ -113,7 +113,9 @@ function Test-Win2Ancestry([string] $id) {
     return $false
 }
 $result = @(
-    foreach ($id in $ids) {
+    foreach ($rawId in $ids) {
+        $id = [string]$rawId
+        if ([string]::IsNullOrEmpty($id)) { continue }
         $paths = Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_LocationPaths -ErrorAction SilentlyContinue
         [pscustomobject]@{InstanceID=$id; Location=[string](@($paths.Data | Sort-Object)[0]); Port=''; Virtual=(Test-Win2Ancestry $id)}
     }
@@ -121,7 +123,7 @@ $result = @(
         if ($dev.FriendlyName -match '\((COM\d+)\)') {
             $port = $Matches[1]
             $paths = Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_LocationPaths -ErrorAction SilentlyContinue
-            [pscustomobject]@{InstanceID=$dev.InstanceId; Location=[string](@($paths.Data | Sort-Object)[0]); Port=$port; Virtual=(Test-Win2Ancestry $dev.InstanceId)}
+            [pscustomobject]@{InstanceID=[string]$dev.InstanceId; Location=[string](@($paths.Data | Sort-Object)[0]); Port=[string]$port; Virtual=(Test-Win2Ancestry $dev.InstanceId)}
         }
     }
 )

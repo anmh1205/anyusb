@@ -133,19 +133,27 @@ func (a *Adapter) Attach(ctx context.Context, host, busID string) (platform.Impo
 		return platform.Import{}, err
 	}
 
-	// The kernel may still be assigning the imported device a local USB address.
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	return waitForImport(ctx, lookup)
+}
+
+func waitForImport(ctx context.Context, lookup func(context.Context) (platform.Import, bool, error)) (platform.Import, error) {
+	// usbip port can fail while the kernel is still assigning a local USB address.
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
+	var probeErr error
 	for {
 		if imported, found, err := lookup(ctx); found {
 			return imported, nil
 		} else if err != nil {
-			return platform.Import{}, fmt.Errorf("%w: attach completed but its port could not be read: %v", platform.ErrConflict, err)
+			probeErr = err
 		}
 		select {
 		case <-ctx.Done():
+			if probeErr != nil {
+				return platform.Import{}, fmt.Errorf("%w: attach completed but its port could not be confirmed; run anyusb list --imports: %v", platform.ErrConflict, probeErr)
+			}
 			return platform.Import{}, fmt.Errorf("%w: attach completed without a confirmed port; run anyusb list --imports", platform.ErrConflict)
 		case <-ticker.C:
 		}
