@@ -2,6 +2,9 @@
 
 **2026-11-22 · AnyUSB Phase 1**
 
+The [two-guest network lab](virtual-network-lab.md) follows this same-kernel
+baseline with measured latency, packet loss, and interruptions.
+
 ## Environment
 
 The host ran Windows 11 Pro 24H2 x64 (build `26100.8037`) and Go `1.27.4`.

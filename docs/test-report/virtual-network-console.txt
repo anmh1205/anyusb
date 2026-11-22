@@ -1,0 +1,147 @@
+host boot:
+[    0.028000] ..MP-BIOS bug: 8254 timer not connected to IO-APIC
+6.12.117+deb13-amd64
+usbip (usbip-utils 2.0)
+tc utility, iproute2-6.17.0
+AnyUSB lab control ready
+client boot:
+[    0.024000] ..MP-BIOS bug: 8254 timer not connected to IO-APIC
+6.12.117+deb13-amd64
+usbip (usbip-utils 2.0)
+tc utility, iproute2-6.17.0
+AnyUSB lab control ready
+CDC: 1-1 e944187aceb9583674a1c7444f08f9ec, 1-1/2
+CASE stock USB/IP across two kernels
+link profile clean, each direction: delay 0ms
+received initial 4096 bytes
+verified 32768 bytes each way in 100 ms, sha256=423031219aee495ee6349efae8afdff7bb1e1084ccc51b2c700e8f54016a939b
+PASS stock USB/IP across two kernels
+link profile WAN, each direction: delay 40ms 12ms loss 1% rate 10mbit
+CASE managed transfer on clean
+link profile clean, each direction: delay 0ms
+PING 10.67.0.1 (10.67.0.1): 56 data bytes
+
+--- 10.67.0.1 ping statistics ---
+12 packets transmitted, 12 packets received, 0% packet loss
+round-trip min/avg/max = 16.153/28.857/31.736 ms
+managed attach: /dev/ttyACM0 after 3406 ms
+received initial 4096 bytes
+verified 65536 bytes each way in 281 ms, sha256=febaa4247825ead08814a5fe1add77e35e0985dbcf9b5d3d31b3e4bbba1213af
+egress packet drops during profile: host 0, client 0
+link profile clean, each direction: delay 0ms
+PASS managed transfer on clean
+CASE managed transfer on LAN
+link profile LAN, each direction: delay 4ms 1ms
+PING 10.67.0.1 (10.67.0.1): 56 data bytes
+
+--- 10.67.0.1 ping statistics ---
+12 packets transmitted, 12 packets received, 0% packet loss
+round-trip min/avg/max = 26.611/30.769/31.730 ms
+managed attach: /dev/ttyACM0 after 3906 ms
+received initial 4096 bytes
+verified 65536 bytes each way in 375 ms, sha256=89a6a4192f857aa9b84df8312490c8716870f06123fda04ebec57b2a9d2cda10
+egress packet drops during profile: host 0, client 0
+link profile clean, each direction: delay 0ms
+PASS managed transfer on LAN
+CASE managed transfer on WAN
+link profile WAN, each direction: delay 40ms 12ms loss 1% rate 10mbit
+PING 10.67.0.1 (10.67.0.1): 56 data bytes
+
+--- 10.67.0.1 ping statistics ---
+12 packets transmitted, 12 packets received, 0% packet loss
+round-trip min/avg/max = 77.953/93.956/106.902 ms
+managed attach: /dev/ttyACM0 after 4937 ms
+received initial 4096 bytes
+verified 65536 bytes each way in 950 ms, sha256=03f429748361c05de736b44edd4ee91f9a08abcc036af473dd2bb75459522082
+egress packet drops during profile: host 3, client 0
+link profile clean, each direction: delay 0ms
+PASS managed transfer on WAN
+CASE managed transfer on mobile
+link profile mobile, each direction: delay 90ms 25ms loss 3% rate 3mbit
+PING 10.67.0.1 (10.67.0.1): 56 data bytes
+
+--- 10.67.0.1 ping statistics ---
+12 packets transmitted, 12 packets received, 0% packet loss
+round-trip min/avg/max = 153.779/195.056/235.902 ms
+managed attach: /dev/ttyACM0 after 7360 ms
+received initial 4096 bytes
+verified 65536 bytes each way in 3760 ms, sha256=4d0b1d675750726dcc30296718482d8bdea51d690f1c893b214addc08c16b642
+egress packet drops during profile: host 1, client 5
+link profile clean, each direction: delay 0ms
+PASS managed transfer on mobile
+CASE managed transfer on severe
+link profile severe, each direction: delay 200ms 60ms loss 5% rate 1mbit
+PING 10.67.0.1 (10.67.0.1): 56 data bytes
+
+--- 10.67.0.1 ping statistics ---
+12 packets transmitted, 10 packets received, 16% packet loss
+round-trip min/avg/max = 322.695/408.699/520.296 ms
+managed attach: /dev/ttyACM0 after 15157 ms
+received initial 4096 bytes
+verified 65536 bytes each way in 7382 ms, sha256=0c55f0bc9be1d96253d0f0ec180e219503d1885de615b6d4291eed311a6b1409
+egress packet drops during profile: host 13, client 13
+link profile clean, each direction: delay 0ms
+PASS managed transfer on severe
+CASE managed transfer on asymmetric
+link profile asymmetric, host: delay 35ms 10ms loss 1% rate 10mbit; client: delay 120ms 45ms loss 4% rate 768kbit
+PING 10.67.0.1 (10.67.0.1): 56 data bytes
+
+--- 10.67.0.1 ping statistics ---
+12 packets transmitted, 11 packets received, 8% packet loss
+round-trip min/avg/max = 138.535/174.532/216.375 ms
+managed attach: /dev/ttyACM0 after 7344 ms
+received initial 4096 bytes
+verified 65536 bytes each way in 2634 ms, sha256=fd37dd699f6b69df4ee369fb3f80716dce1c19cc79138495c95f1233fe6904e8
+egress packet drops during profile: host 4, client 7
+link profile clean, each direction: delay 0ms
+PASS managed transfer on asymmetric
+link profile mobile, each direction: delay 90ms 25ms loss 3% rate 3mbit
+managed attach: /dev/ttyACM0 after 7656 ms
+CASE USB replug on mobile #1
+received initial 4096 bytes
+verified 4096 bytes each way in 314 ms, sha256=3d25e15192fa914cf4ab0685bfb5b326fcb3f4e22b7064919e198aa80f56b0ef
+USB replug recovery: 13437 ms to verified bytes
+PASS USB replug on mobile #1
+CASE USB replug on mobile #2
+received initial 4096 bytes
+verified 4096 bytes each way in 263 ms, sha256=b49fda63c747c8a5c53a6c9b7d8a68e25e963fa8c9e383d28810767b8403797b
+USB replug recovery: 13375 ms to verified bytes
+PASS USB replug on mobile #2
+CASE USB replug on mobile #3
+received initial 4096 bytes
+verified 4096 bytes each way in 453 ms, sha256=75091a12809c5b5910cc7ac93feaff873ee1f5802ab44a0f2a38ae8186d7e1bd
+USB replug recovery: 13110 ms to verified bytes
+PASS USB replug on mobile #3
+CASE three-second blackhole during transfer
+link profile blackhole, each direction: loss 100%
+link profile mobile, each direction: delay 90ms 25ms loss 3% rate 3mbit
+short outage: received initial 4096 bytes
+verified 262144 bytes each way in 13832 ms, sha256=c83b76a6958e9b2132937fa904bec51e599a26c4aa9bcf7a29f64074b3678a9f; completed 14156 ms after restoration on the original import
+PASS three-second blackhole during transfer
+CASE twelve-second blackhole with reattach
+link profile blackhole, each direction: loss 100%
+partition state before restoration: lost
+link profile mobile, each direction: delay 90ms 25ms loss 3% rate 3mbit
+received initial 4096 bytes
+verified 4096 bytes each way in 288 ms, sha256=ce7bfc49cf883431b93d72773821c9851445ce1428041b802f44852e645692b8
+partition recovery: 13390 ms to verified bytes
+PASS twelve-second blackhole with reattach
+CASE TCP connection reset
+State Recv-Q Send-Q Local Address:Port  Peer Address:Port
+ESTAB 0      0          10.67.0.2:56798    10.67.0.1:47443
+ESTAB 0      0          10.67.0.2:56946    10.67.0.1:47443
+received initial 4096 bytes
+verified 4096 bytes each way in 280 ms, sha256=19e07028ca59eef1bcd5209ab98117ec5a3e20ee7fbb59492472ef9ef547e45a
+TCP reset recovery: 13078 ms to verified bytes
+PASS TCP connection reset
+CASE forty-second blackhole and lease expiry
+link profile blackhole, each direction: loss 100%
+40 s partition: host export, client import and old lease cleaned up before link restoration
+link profile mobile, each direction: delay 90ms 25ms loss 3% rate 3mbit
+managed attach: /dev/ttyACM0 after 8032 ms
+received initial 4096 bytes
+verified 4096 bytes each way in 266 ms, sha256=cfbbdb28c92ec8d70f63acadcbec1f0106923ad188c7b6f21cdc747bf56950d3
+explicit reconnect after expiry obtained a new lease
+PASS forty-second blackhole and lease expiry
+link profile clean, each direction: delay 0ms
+AnyUSB NETWORK LAB RESULT=0
