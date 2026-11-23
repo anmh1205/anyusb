@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+if [ "${1:-}" = configure ]; then
+    python3 -m venv /opt/anyusb/esp
+    /opt/anyusb/esp/bin/python -m pip install --disable-pip-version-check --no-index \
+        --find-links=/usr/lib/anyusb/wheels esptool==5.2.0
+    modprobe usbip-host || echo 'AnyUSB: USB host driver not available in the running kernel.' >&2
+    modprobe vhci-hcd || echo 'AnyUSB: USB client driver not available in the running kernel.' >&2
+    deb-systemd-helper enable anyusb-usbipd.service anyusbd.service >/dev/null
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload
+        deb-systemd-invoke restart anyusb-usbipd.service anyusbd.service
+    fi
+fi

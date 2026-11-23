@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+test "$#" -eq 0
+unset ANYUSB_SOCKET
+exec /usr/bin/anyusb -socket /run/anyusb/control.sock ui

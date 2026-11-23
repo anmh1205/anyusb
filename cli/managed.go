@@ -29,6 +29,15 @@ func managedCLI(ctx context.Context, c client, command string, args []string, ou
 	method, path, message := http.MethodGet, "", ""
 	var body any
 	switch command {
+	case "desktop-url":
+		if len(args) != 0 {
+			return true, fmt.Errorf("usage: anyusb desktop-url")
+		}
+		url, err := desktopURL(ctx)
+		if err == nil {
+			_, err = fmt.Fprintln(out, url)
+		}
+		return true, err
 	case "ui":
 		if len(args) != 0 {
 			return true, fmt.Errorf("usage: anyusb ui")

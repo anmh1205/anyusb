@@ -4,7 +4,8 @@ param(
     [Parameter(Mandatory)] [string] $BuildDirectory,
     [string] $Python,
     [string[]] $PeerSources = @(),
-    [switch] $KeepStockUsbipRule
+    [switch] $KeepStockUsbipRule,
+    [switch] $DesktopInstaller
 )
 $ErrorActionPreference = 'Stop'
 $build = (Resolve-Path -LiteralPath $BuildDirectory).Path
@@ -15,6 +16,9 @@ if (Get-Service -Name anyusbd -ErrorAction SilentlyContinue) {
     throw 'The anyusbd service already exists. Use the current installation or remove that service before a fresh install.'
 }
 $architecture = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+if ($DesktopInstaller -and $PeerSources.Count -eq 0) {
+    $PeerSources = @('LocalSubnet', '100.64.0.0/10', 'fd7a:115c:a1e0::/48')
+}
 $assets = @(
     @{
         Name = "usbipd-win_5.3.0_$architecture.msi"; Repo = 'dorssel/usbipd-win'; Tag = 'v5.3.0'
@@ -31,10 +35,11 @@ foreach ($asset in $assets) {
 if (!$KeepStockUsbipRule) { Write-Host 'Disable the upstream inbound usbipd rule for managed mode.' }
 if ($PeerSources.Count -gt 0) { Write-Host "Allow inbound HTTPS peer traffic TCP 47443 from $($PeerSources -join ', ')." }
 Write-Host 'Install the AnyUSB Windows service. Windows installers will display their own UI.'
-if ((Read-Host 'Type INSTALL to continue') -cne 'INSTALL') { return }
+if (!$DesktopInstaller -and (Read-Host 'Type INSTALL to continue') -cne 'INSTALL') { return }
 
 $download = Join-Path $env:TEMP ('anyusb-install-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $download | Out-Null
+$restartNeeded = $false
 foreach ($asset in $assets) {
     $installed = Join-Path $env:ProgramFiles (Join-Path $asset.Folder $asset.Exe)
     if (Test-Path -LiteralPath $installed -PathType Leaf) {
@@ -53,12 +58,17 @@ foreach ($asset in $assets) {
     if (('sha256:' + (Get-FileHash -LiteralPath $installer).Hash) -ne $metadata.digest -or
         (Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'Valid') { throw "Signature or hash check failed for $installer" }
     if ($installer.EndsWith('.msi')) {
-        $result = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList "/i `"$installer`" /norestart" -Wait -PassThru
+        $switches = if ($DesktopInstaller) { '/qn /norestart' } else { '/norestart' }
+        $result = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList "/i `"$installer`" $switches" -Wait -PassThru
     } else {
-        $result = Start-Process -FilePath $installer -ArgumentList '/NORESTART' -Wait -PassThru
+        $switches = if ($DesktopInstaller) { '/VERYSILENT /SUPPRESSMSGBOXES /SP- /NORESTART' } else { '/NORESTART' }
+        $result = Start-Process -FilePath $installer -ArgumentList $switches -Wait -PassThru
     }
     if ($result.ExitCode -notin @(0, 3010)) { throw "$($asset.Name) returned $($result.ExitCode)" }
-    if ($result.ExitCode -eq 3010 -or $installer.EndsWith('.exe')) { Write-Host 'Reboot Windows when convenient before hardware verification.' }
+    if ($result.ExitCode -eq 3010 -or $installer.EndsWith('.exe')) {
+        $restartNeeded = $true
+        Write-Host 'Reboot Windows before using the USB/IP driver.'
+    }
 }
 
 if (!$KeepStockUsbipRule) {
@@ -75,11 +85,21 @@ $data = Join-Path $env:ProgramData 'AnyUSB'
 foreach ($directory in @($destination, $data)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
     if ((Get-Item -LiteralPath $directory -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing reparse point $directory" }
-    & icacls.exe $directory /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    $access = @('*S-1-5-18:(OI)(CI)F', '*S-1-5-32-544:(OI)(CI)F')
+    if ($directory -eq $destination) { $access += '*S-1-5-32-545:(OI)(CI)RX' }
+    & icacls.exe $directory /inheritance:r /grant:r @access | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Failed to protect $directory" }
 }
-Copy-Item -LiteralPath (Join-Path $build 'anyusbd.exe'), (Join-Path $build 'anyusb.exe') -Destination $destination
+if ($build.TrimEnd('\') -ne $destination.TrimEnd('\')) {
+    Copy-Item -LiteralPath (Join-Path $build 'anyusbd.exe'), (Join-Path $build 'anyusb.exe') -Destination $destination
+}
 $binary = '"' + (Join-Path $destination 'anyusbd.exe') + '"'
+if ($DesktopInstaller) {
+    $binary += ' -desktop'
+    if (!(Get-NetFirewallRule -Name 'AnyUSB-LAN-Discovery' -ErrorAction SilentlyContinue)) {
+        New-NetFirewallRule -Name 'AnyUSB-LAN-Discovery' -DisplayName 'AnyUSB LAN discovery' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 5353 -RemoteAddress LocalSubnet -Program (Join-Path $destination 'anyusbd.exe') | Out-Null
+    }
+}
 if ($Python) {
     $pythonPath = (Resolve-Path -LiteralPath $Python).Path
     $machineDir = [IO.Path]::GetFullPath($env:ProgramFiles) + '\'
@@ -93,3 +113,4 @@ if ($Python) {
 New-Service -Name anyusbd -DisplayName 'AnyUSB Agent' -BinaryPathName $binary -StartupType Automatic | Out-Null
 Start-Service -Name anyusbd
 & (Join-Path $destination 'anyusb.exe') doctor
+if ($DesktopInstaller -and $restartNeeded) { exit 3010 }

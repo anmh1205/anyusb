@@ -18,6 +18,7 @@ import (
 const (
 	DefaultSocket = "/run/anyusb/control.sock"
 	DefaultPipe   = `\\.\pipe\anyusb-control`
+	DesktopPipe   = `\\.\pipe\anyusb-desktop`
 	LocalHost     = "anyusb"
 	CallTimeout   = 35 * time.Second
 )

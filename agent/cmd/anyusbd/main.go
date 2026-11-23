@@ -21,7 +21,7 @@ import (
 type options struct {
 	socket, data, usbip, usbipd, python string
 	peer, ui, advertise, backend, name  string
-	mdns                                bool
+	mdns, desktop                       bool
 }
 
 func main() {
@@ -38,6 +38,7 @@ func main() {
 	flag.StringVar(&opt.backend, "backend", "127.0.0.1:3240", "loopback address of the stock USB/IP host backend")
 	flag.StringVar(&opt.name, "name", host, "name shown to other AnyUSB operators")
 	flag.BoolVar(&opt.mdns, "mdns", true, "advertise on the local network")
+	flag.BoolVar(&opt.desktop, "desktop", false, "allow local interactive Windows users to open the desktop app")
 	flag.Parse()
 	if flag.NArg() != 0 || len(opt.name) > 128 {
 		flag.Usage()
@@ -101,6 +102,13 @@ func run(parent context.Context, opt options) error {
 	control := core.Options{Mesh: node.LocalHandler(), ESPCheck: node.ESPCheck, RawShare: node.RawShare}
 	if ui != nil {
 		control.UIURL = ui.URL()
+		if opt.desktop {
+			bootstrap, err := listenDesktop(control.UIURL)
+			if err != nil {
+				return err
+			}
+			defer bootstrap.Close()
+		}
 	}
 	handler := core.Handler(adapter, control)
 	if ui != nil {

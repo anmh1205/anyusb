@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added a desktop UI and Windows and Ubuntu package builders. Daily use can
+  discover peers, approve pairing, share and connect USB, and choose an
+  ESP-IDF manifest from the app.
+
 - Kept active managed USB/IP imports through brief lease-renewal interruptions.
   A new import still requires a confirmed lease and current bus ID.
 - Fixed intermittent Linux attach failures when `usbip port` cannot yet read

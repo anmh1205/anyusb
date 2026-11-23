@@ -30,6 +30,30 @@ func listenLocal(path string) (net.Listener, io.Closer, error) {
 	return listener, nil, err
 }
 
+func listenDesktop(url string) (io.Closer, error) {
+	listener, err := winio.ListenPipe(core.DesktopPipe, &winio.PipeConfig{
+		SecurityDescriptor: "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;IU)", OutputBufferSize: 1024,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open desktop pipe: %w", err)
+	}
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				if err != winio.ErrPipeListenerClosed {
+					log.Printf("AnyUSB desktop pipe: %v", err)
+				}
+				return
+			}
+			_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
+			_, _ = io.WriteString(conn, url+"\n")
+			_ = conn.Close()
+		}
+	}()
+	return listener, nil
+}
+
 func nativeRun(run func(context.Context) error) error {
 	service, err := svc.IsWindowsService()
 	if err != nil {

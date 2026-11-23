@@ -1,59 +1,58 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AnyUSB</title>
   <link rel="stylesheet" href="/style.css">
+  <link rel="icon" href="/anyusb.png" type="image/png">
   <script src="/app.js" defer></script>
 </head>
 <body>
-  <header><div><h1>AnyUSB</h1><p id="agent"></p></div><button id="refresh" type="button">Refresh</button></header>
-  <main>
-    <p id="notice" role="status"></p>
-    <section aria-labelledby="devices-title">
-      <h2 id="devices-title">Local devices</h2>
-      <div class="table"><table><thead><tr><th>Device</th><th>Bus ID</th><th>Lease holder</th><th>Sharing</th></tr></thead><tbody id="local"></tbody></table></div>
-    </section>
-    <section aria-labelledby="peer-title">
-      <h2 id="peer-title">Peers</h2>
+  <aside class="sidebar" aria-label="Máy tính">
+    <header class="brand"><span class="mark" aria-hidden="true">A</span><div><strong>AnyUSB</strong><span id="agent">Đang mở…</span></div></header>
+    <nav><button id="this-machine" class="nav-device active" type="button">Máy này</button></nav>
+    <div class="side-heading"><h2>Máy đã ghép cặp</h2></div>
+    <nav id="peers" aria-label="Máy đã ghép cặp"></nav>
+    <div class="side-heading"><h2>Máy tìm thấy</h2><button id="discover" class="subtle" type="button">Quét lại</button></div>
+    <nav id="discoveries" aria-label="Máy tìm thấy"></nav>
+    <p id="scan" class="small"></p>
+    <details class="manual"><summary>Ghép cặp bằng địa chỉ</summary>
       <form id="pair">
-        <label>Address <input name="endpoint" required placeholder="hostname or IP"></label>
-        <label>Pairing code <input name="code" required pattern="[0-9]{8}" inputmode="numeric" maxlength="8"></label>
-        <button>Pair</button><button id="invite" type="button">Create code</button><button id="discover" type="button">Discover LAN</button>
+        <label>IP hoặc tên máy <input name="endpoint" required autocomplete="off"></label>
+        <label>Mã mời <input name="code" required pattern="[0-9]{8}" inputmode="numeric" maxlength="8"></label>
+        <button type="submit">Ghép cặp</button><button id="invite" type="button">Tạo mã mời</button>
       </form>
-      <p id="invite-code" aria-live="polite"></p>
-      <ul id="discoveries"></ul>
-    </section>
-    <section aria-labelledby="remote-title">
-      <div class="section-title"><h2 id="remote-title">Remote devices</h2><label>Peer <select id="peer"></select></label></div>
-      <div class="table"><table><thead><tr><th>Device</th><th>USB status</th><th>Lease holder</th><th>Actions</th></tr></thead><tbody id="remote"></tbody></table></div>
-    </section>
-    <section aria-labelledby="esp-title">
-      <div class="section-title"><h2 id="esp-title">Remote ESP</h2><span id="target">Select a remote device</span></div>
+      <p id="invite-code"></p>
+    </details>
+  </aside>
+  <main>
+    <header class="page-head"><div><h1 id="page-title">Thiết bị USB</h1><p id="page-detail"></p></div><button id="refresh" type="button">Làm mới</button></header>
+    <p id="notice" role="status" hidden></p>
+    <section id="pairing" hidden aria-label="Yêu cầu ghép cặp"><h2>Yêu cầu ghép cặp</h2><div id="requests"></div></section>
+    <section id="local-section" aria-label="Thiết bị cắm vào máy này"><div id="local" class="devices"></div></section>
+    <section id="remote-section" hidden aria-label="Thiết bị trên máy đã ghép cặp"><div id="remote" class="devices"></div></section>
+    <section id="esp-panel" hidden aria-label="Công cụ ESP">
+      <div class="section-head"><div><h2>Công cụ ESP</h2><p id="target"></p></div><button id="close-esp" type="button">Đóng</button></div>
       <form id="esp-form">
-        <label>Host serial port <input name="port" placeholder="Auto"></label>
-        <label>Baud <input name="baud" type="number" min="300" max="4000000" value="115200"></label>
-        <button type="button" data-op="chip-id">Chip ID</button><button type="button" data-op="reset">Reset</button>
-        <button type="button" data-op="erase">Erase</button><button id="monitor" type="button">Open monitor</button>
-        <fieldset><legend>Firmware</legend>
-          <label>ESP-IDF manifest <input name="manifest" type="file" accept=".json"></label>
-          <label>Firmware files <input name="firmware" type="file" accept=".bin" multiple></label>
-          <label>Offset for a single file <input name="offset" value="0x0"></label>
-          <button type="button" data-op="flash">Flash</button><button type="button" data-op="verify">Verify</button>
-        </fieldset>
+        <div class="toolbar"><label>Tốc độ baud <input name="baud" type="number" min="300" max="4000000" value="115200"></label>
+          <label>Cổng trên máy cắm USB <input name="port" placeholder="Tự chọn"></label>
+          <button type="button" data-op="chip-id">Đọc chip</button><button type="button" data-op="reset">Khởi động lại</button>
+          <button id="monitor" type="button">Mở Serial Monitor</button></div>
+        <div class="firmware-row"><button id="choose-firmware" type="button">Chọn flasher_args.json</button>
+          <span id="firmware-name">Chưa chọn firmware</span><button class="primary" type="button" data-op="flash">Nạp</button>
+          <button type="button" data-op="verify">Verify</button></div>
+        <input id="firmware-folder" type="file" webkitdirectory hidden>
       </form>
-      <pre id="logs" aria-live="off"></pre>
-      <form id="serial">
-        <label>Serial input <input name="text" autocomplete="off"></label>
-        <button>Send</button><label class="check"><input name="dtr" type="checkbox"> DTR</label>
-        <label class="check"><input name="rts" type="checkbox"> RTS</label><button id="apply-serial" type="button">Apply baud and signals</button>
+      <p id="esp-status" role="status" hidden></p>
+      <pre id="logs" aria-label="Nhật ký ESP" tabindex="0"></pre>
+      <form id="serial" class="toolbar" hidden>
+        <label>Dữ liệu gửi <input name="text" autocomplete="off"></label><button>Gửi</button>
+        <label class="check"><input name="dtr" type="checkbox"> DTR</label><label class="check"><input name="rts" type="checkbox"> RTS</label>
+        <button id="apply-serial" type="button">Áp dụng</button>
       </form>
     </section>
-    <section aria-labelledby="doctor-title">
-      <div class="section-title"><h2 id="doctor-title">Diagnostics</h2><button type="button" id="doctor">Run diagnostics</button></div>
-      <ul id="checks"></ul>
-    </section>
+    <details class="diagnostics"><summary>Chẩn đoán</summary><button type="button" id="doctor">Kiểm tra dịch vụ và driver</button><ul id="checks"></ul></details>
   </main>
 </body>
 </html>

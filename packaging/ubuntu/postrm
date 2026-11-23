@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+case "${1:-}" in
+    remove|purge)
+        deb-systemd-helper disable anyusbd.service anyusb-usbipd.service >/dev/null || true
+        if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi
+        ;;
+esac

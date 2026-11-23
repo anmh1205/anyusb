@@ -4,6 +4,33 @@ Share USB devices between Windows and Linux over LAN or Tailscale. AnyUSB
 orchestrates native USB/IP backends and runs remote ESP operations on the
 computer with the physical board.
 
+## Desktop app
+
+Install AnyUSB on both computers and open it from the Start menu or Ubuntu's
+application menu. The x64 Windows installer and Ubuntu 24.04 amd64 package
+are generated in `dist/desktop/`.
+
+1. Pick the other computer from **Máy tìm thấy**. Discovery uses the LAN
+   and the machines visible to an already signed-in Tailscale client.
+2. On the receiving computer, check that the displayed code matches and
+   click **Mã trùng, đồng ý**. Pairing is saved on both computers.
+3. On the machine with the USB cable, click **Cho phép dùng** on the device.
+   On the other machine, click the paired machine and **Kết nối**. The device
+   card shows the serial port when the operating system exposes one.
+4. To use the host's ESP tools, disconnect that USB import and open **ESP**
+   on the device card. Choose the generated `flasher_args.json`, then use
+   **Nạp**, **Verify**, or **Mở Serial Monitor**.
+
+The Windows installer prepares the service and signed upstream USB drivers;
+Windows may request a reboot. The Ubuntu package installs the app launcher,
+agent and backend services. Desktop access is reserved for interactive local
+users. Administrators can also use the CLI and script paths below.
+
+To build the installers, first build the Go binaries below, then run
+`python scripts/package-desktop.py --help` for the required Electron archives,
+release checksum list, NSIS compiler, Python embedded runtime, and esptool
+wheel sets. See [desktop packaging](docs/desktop-packaging.md).
+
 ## Build
 
 Use Go 1.24 or newer.

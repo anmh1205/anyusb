@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=AnyUSB
+Comment=Connect USB devices across LAN and Tailscale
+Exec=/opt/anyusb/desktop/anyusb-desktop
+Icon=anyusb
+Terminal=false
+Categories=Utility;
+StartupWMClass=AnyUSB

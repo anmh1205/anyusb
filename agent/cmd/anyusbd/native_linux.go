@@ -3,17 +3,22 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/anmh1205/anyusb/agent/core"
-	"github.com/anmh1205/anyusb/agent/platform"
-	"github.com/anmh1205/anyusb/agent/platform/linux"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/anmh1205/anyusb/agent/core"
+	"github.com/anmh1205/anyusb/agent/platform"
+	"github.com/anmh1205/anyusb/agent/platform/linux"
 )
 
 func defaultSocket() string                               { return core.DefaultSocket }
 func defaultData() string                                 { return "/var/lib/anyusb" }
 func nativeAdapter(opt options) (platform.Adapter, error) { return linux.New(opt.usbip) }
+func listenDesktop(string) (io.Closer, error) {
+	return nil, fmt.Errorf("Linux desktop startup uses polkit")
+}
 
 func nativeRun(run func(context.Context) error) error {
 	if os.Geteuid() != 0 {
