@@ -28,7 +28,7 @@ const usage = `Usage: anyusb [-socket PATH] [-json] COMMAND
   share [--managed] DEVICE_ID_OR_BUSID
   unshare [--managed] DEVICE_ID_OR_BUSID
   connect HOST BUSID | connect --peer PEER DEVICE
-  disconnect VHCI_PORT | disconnect --lease ID
+  disconnect VHCI_PORT | disconnect --connection ID
   watch [--peer PEER]
   discover | peers | pair invite | pair HOST CODE
   revoke PEER | peer-address PEER HOST

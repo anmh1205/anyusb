@@ -38,3 +38,25 @@ func TestLoopbackAuthorization(t *testing.T) {
 		}
 	}
 }
+
+func TestDesktopUIOnlyOffersNativeUSBForwarding(t *testing.T) {
+	index, err := files.ReadFile("static/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := files.ReadFile("static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := strings.ToLower(string(index) + string(script))
+	for _, forbidden := range []string{"type=\"file\"", "firmware", "công cụ esp", "chọn file"} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("desktop UI contains obsolete firmware workflow %q", forbidden)
+		}
+	}
+	for _, required := range []string{"cổng trên máy này", "usb đã được gắn vào hệ điều hành", "tự nối lại"} {
+		if !strings.Contains(page, required) {
+			t.Fatalf("desktop UI is missing native forwarding guidance %q", required)
+		}
+	}
+}

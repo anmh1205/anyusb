@@ -112,13 +112,13 @@ func managedCLI(ctx context.Context, c client, command string, args []string, ou
 		method, path = http.MethodPost, meshPath+"/connections"
 		body = map[string]string{"peer": args[1], "device": args[2]}
 	case "disconnect":
-		if len(args) == 0 || args[0] != "--lease" {
+		if len(args) == 0 || (args[0] != "--connection" && args[0] != "--lease") {
 			return false, nil
 		}
 		if len(args) != 2 {
-			return true, fmt.Errorf("usage: anyusb disconnect --lease ID")
+			return true, fmt.Errorf("usage: anyusb disconnect --connection ID")
 		}
-		method, path, message = http.MethodDelete, meshPath+"/connections/"+url.PathEscape(args[1]), "Lease disconnected"
+		method, path, message = http.MethodDelete, meshPath+"/connections/"+url.PathEscape(args[1]), "Connection disconnected"
 	case "watch":
 		if len(args) != 2 || args[0] != "--peer" {
 			return false, nil

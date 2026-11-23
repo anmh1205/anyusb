@@ -37,9 +37,16 @@ type Peer struct {
 
 type descriptor struct{ VendorID, ProductID, Serial string }
 
+type connectionIntent struct {
+	ID     string `json:"id"`
+	Peer   string `json:"peer"`
+	Device string `json:"device"`
+}
+
 type config struct {
-	Peers  map[string]Peer         `json:"peers"`
-	Shares map[string][]descriptor `json:"shares"`
+	Peers       map[string]Peer             `json:"peers"`
+	Shares      map[string][]descriptor     `json:"shares"`
+	Connections map[string]connectionIntent `json:"connections,omitempty"`
 }
 
 type Node struct {
@@ -106,7 +113,11 @@ func New(ctx context.Context, adapter platform.Adapter, dir, name, advertised, b
 	if n.config.Shares == nil {
 		n.config.Shares = make(map[string][]descriptor)
 	}
+	if n.config.Connections == nil {
+		n.config.Connections = make(map[string]connectionIntent)
+	}
 	go n.reconcileLoop()
+	n.restoreConnections()
 	return n, nil
 }
 

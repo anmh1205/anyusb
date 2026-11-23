@@ -178,6 +178,10 @@ async function refreshRemote() {
         const localPorts = el("p", "", "local-ports");
         localPorts.append(el("span", "Cổng trên máy này"), ...ports.map(port => el("code", port)));
         notes.push(localPorts, el("p", "Chọn cổng này trong VS Code hoặc IDE của bạn.", "meta"));
+      } else if (online) {
+        notes.push(el("p", "USB đã được gắn vào hệ điều hành. Nếu thiết bị có cổng serial, hãy đợi driver tạo COM/tty rồi chọn cổng đó trong IDE.", "meta"));
+      } else if (current) {
+        notes.push(el("p", "AnyUSB sẽ tự nối lại khi máy từ xa, mạng hoặc thiết bị sẵn sàng; không cần bấm Kết nối lại.", "meta"));
       }
       if (current?.error) notes.push(el("p", current.error, "link-error"));
       return card(label(device), summary, online || device.present && !current ? "good" : current ? "wait" : "", [connect], notes);

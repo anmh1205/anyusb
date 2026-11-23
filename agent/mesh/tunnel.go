@@ -131,65 +131,121 @@ type Connection struct {
 
 type connection struct {
 	Connection
-	peer     Peer
-	listener net.Listener
-	cancel   context.CancelFunc
-	done     chan struct{}
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 func (n *Node) connect(ctx context.Context, peer Peer, device string) (Connection, error) {
 	n.clientMu.Lock()
 	defer n.clientMu.Unlock()
-	n.mu.Lock()
-	for _, session := range n.connections {
-		if session.Peer == peer.ID && session.Device == device {
-			value := session.Connection
-			n.mu.Unlock()
-			return value, nil
-		}
-	}
-	n.mu.Unlock()
-	client := n.peerClient(peer.ID)
-	le, err := call[Lease](ctx, client, http.MethodPost, peer.Endpoint, "/v1/leases", struct{ Device string }{device})
-	if err != nil {
-		client.CloseIdleConnections()
+	if err := ctx.Err(); err != nil {
 		return Connection{}, err
 	}
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		n.releasePeer(client, peer, le.ID)
-		client.CloseIdleConnections()
-		return Connection{}, err
-	}
-	lifetime, cancel := context.WithCancel(n.ctx)
-	view := Connection{ID: le.ID, Peer: peer.ID, Device: device, State: "connecting"}
-	session := &connection{Connection: view, peer: peer, listener: listener, cancel: cancel, done: make(chan struct{})}
 	n.mu.Lock()
+	defer n.mu.Unlock()
 	if _, trusted := n.config.Peers[peer.ID]; !trusted {
-		n.mu.Unlock()
-		cancel()
-		listener.Close()
-		n.releasePeer(client, peer, le.ID)
-		client.CloseIdleConnections()
 		return Connection{}, failure(http.StatusForbidden, "peer has been revoked")
 	}
-	n.connections[view.ID] = session
-	n.mu.Unlock()
-	go n.acceptLocal(lifetime, session, client)
-	go n.followLease(lifetime, session, client, le)
-	return view, nil
+	for _, intent := range n.config.Connections {
+		if intent.Peer == peer.ID && intent.Device == device {
+			if session := n.connections[intent.ID]; session != nil {
+				return session.Connection, nil
+			}
+			return n.startConnectionLocked(intent), nil
+		}
+	}
+	intent := connectionIntent{ID: randomID(), Peer: peer.ID, Device: device}
+	n.config.Connections[intent.ID] = intent
+	if err := n.saveLocked(); err != nil {
+		delete(n.config.Connections, intent.ID)
+		return Connection{}, err
+	}
+	return n.startConnectionLocked(intent), nil
 }
 
-func (n *Node) acceptLocal(ctx context.Context, session *connection, client *http.Client) {
+func (n *Node) restoreConnections() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for _, intent := range n.config.Connections {
+		if intent.ID == "" || intent.Peer == "" || intent.Device == "" || n.config.Peers[intent.Peer].ID == "" {
+			continue
+		}
+		n.startConnectionLocked(intent)
+	}
+}
+
+func (n *Node) startConnectionLocked(intent connectionIntent) Connection {
+	if current := n.connections[intent.ID]; current != nil {
+		return current.Connection
+	}
+	lifetime, cancel := context.WithCancel(n.ctx)
+	view := Connection{ID: intent.ID, Peer: intent.Peer, Device: intent.Device, State: "connecting"}
+	session := &connection{Connection: view, cancel: cancel, done: make(chan struct{})}
+	n.connections[intent.ID] = session
+	go n.maintainConnection(lifetime, session)
+	return view
+}
+
+func (n *Node) maintainConnection(ctx context.Context, session *connection) {
+	defer close(session.done)
+	defer func() {
+		n.mu.Lock()
+		if n.connections[session.ID] == session {
+			delete(n.connections, session.ID)
+		}
+		n.publishLocked("disconnected", session.Device)
+		n.mu.Unlock()
+	}()
+	attempt := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+		peer, err := n.findPeer(session.Peer)
+		if err == nil {
+			client := n.peerClient(peer.ID)
+			attemptCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			le, acquireErr := call[Lease](attemptCtx, client, http.MethodPost, peer.Endpoint, "/v1/leases", struct{ Device string }{session.Device})
+			cancel()
+			if acquireErr == nil {
+				listener, listenErr := net.Listen("tcp4", "127.0.0.1:0")
+				if listenErr == nil {
+					err = n.followLease(ctx, session, client, peer, le, listener)
+				} else {
+					n.releasePeer(client, peer, le.ID)
+					err = listenErr
+				}
+			} else {
+				err = acquireErr
+			}
+			client.CloseIdleConnections()
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		n.setConnection(session, "reconnecting", nil, err)
+		attempt++
+		delay := time.Duration(min(attempt, 5)) * time.Second
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (n *Node) acceptLocal(ctx context.Context, listener net.Listener, peer Peer, leaseID string, client *http.Client) {
 	// The virtual controller is the only expected local client. The host accepts one active tunnel per lease.
 	for {
-		tcp, err := session.listener.Accept()
+		tcp, err := listener.Accept()
 		if err != nil {
 			return
 		}
 		func() {
 			defer tcp.Close()
-			target := peerURL(session.peer.Endpoint, "/v1/tunnel/"+url.PathEscape(session.ID))
+			target := peerURL(peer.Endpoint, "/v1/tunnel/"+url.PathEscape(leaseID))
 			ws, _, err := websocket.Dial(ctx, target, &websocket.DialOptions{HTTPClient: client, Subprotocols: []string{tunnelProtocol}})
 			if err != nil {
 				return
@@ -208,14 +264,14 @@ func (n *Node) releasePeer(client *http.Client, peer Peer, id string) {
 	_, _ = call[struct{}](ctx, client, http.MethodDelete, peer.Endpoint, "/v1/leases/"+url.PathEscape(id), nil)
 }
 
-func (n *Node) followLease(ctx context.Context, session *connection, client *http.Client, le Lease) {
-	address := session.listener.Addr().String()
+func (n *Node) followLease(ctx context.Context, session *connection, client *http.Client, peer Peer, le Lease, listener net.Listener) error {
+	lifetime, cancelLifetime := context.WithCancel(ctx)
+	defer cancelLifetime()
+	address := listener.Addr().String()
 	_, port, _ := net.SplitHostPort(address)
-	defer close(session.done)
-	defer client.CloseIdleConnections()
 	defer func() {
-		session.cancel()
-		session.listener.Close()
+		cancelLifetime()
+		listener.Close()
 		cleanup, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		if imports, err := n.adapter.ListImports(cleanup); err == nil {
@@ -225,12 +281,9 @@ func (n *Node) followLease(ctx context.Context, session *connection, client *htt
 				}
 			}
 		}
-		n.releasePeer(client, session.peer, session.ID)
-		n.mu.Lock()
-		delete(n.connections, session.ID)
-		n.publishLocked("disconnected", session.Device)
-		n.mu.Unlock()
+		n.releasePeer(client, peer, le.ID)
 	}()
+	go n.acceptLocal(lifetime, listener, peer, le.ID, client)
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	lastRenewed := time.Now()
@@ -240,11 +293,11 @@ func (n *Node) followLease(ctx context.Context, session *connection, client *htt
 		n.setConnection(session, state, imported, err)
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-ticker.C:
 		}
 		round, cancel := context.WithTimeout(ctx, 4*time.Second)
-		current, err := call[Lease](round, client, http.MethodPut, session.peer.Endpoint, "/v1/leases/"+url.PathEscape(session.ID), nil)
+		current, err := call[Lease](round, client, http.MethodPut, peer.Endpoint, "/v1/leases/"+url.PathEscape(le.ID), nil)
 		cancel()
 		if err == nil {
 			le = current
@@ -255,7 +308,7 @@ func (n *Node) followLease(ctx context.Context, session *connection, client *htt
 		unconfirmed := time.Since(lastRenewed)
 		if unconfirmed >= leaseTTL || isHTTPStatus(err, http.StatusNotFound) ||
 			isHTTPStatus(err, http.StatusForbidden) || isHTTPStatus(err, http.StatusUnauthorized) {
-			return
+			return err
 		}
 		// An existing USB stream may recover through TCP retransmission. A new
 		// import still requires a successful renewal and the current busid.
@@ -313,8 +366,19 @@ func (n *Node) setConnection(session *connection, state string, imported *platfo
 }
 
 func (n *Node) disconnect(ctx context.Context, id string) error {
+	n.clientMu.Lock()
+	defer n.clientMu.Unlock()
 	n.mu.Lock()
 	session := n.connections[id]
+	intent, wanted := n.config.Connections[id]
+	if wanted {
+		delete(n.config.Connections, id)
+		if err := n.saveLocked(); err != nil {
+			n.config.Connections[id] = intent
+			n.mu.Unlock()
+			return err
+		}
+	}
 	n.mu.Unlock()
 	if session == nil {
 		return nil

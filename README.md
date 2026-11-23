@@ -23,6 +23,10 @@ are generated in `dist/desktop/`.
    In Arduino IDE, select the board and port and use **Upload** as usual.
    [ESP-IDF port selection](https://docs.espressif.com/projects/vscode-esp-idf-extension/en/latest/connectdevice.html) · [Arduino IDE port selection](https://docs.arduino.cc/software/ide-v2/tutorials/getting-started/ide-v2-uploading-a-sketch/)
 
+The selected connection is remembered. AnyUSB automatically reattaches it after
+an agent restart and when the remote computer, network, or USB device returns.
+Click **Ngắt kết nối** to stop retrying and forget that connection.
+
 The Windows installer prepares the service and signed upstream USB drivers;
 Windows may request a reboot. The Ubuntu package installs the app launcher,
 agent and backend services. Desktop access is reserved for interactive local
@@ -96,7 +100,7 @@ anyusb peers
 anyusb list --peer PEER
 anyusb connect --peer PEER DEVICE
 anyusb list --connections
-anyusb disconnect --lease LEASE
+anyusb disconnect --connection CONNECTION
 ```
 
 Keep TCP 47443 reachable only by the intended networks. Stock USB/IP on TCP

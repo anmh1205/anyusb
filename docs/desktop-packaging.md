@@ -2,12 +2,12 @@
 
 ## Install
 
-- On Windows x64, run `AnyUSB-0.1.1-Windows-x64.exe` and open
+- On Windows x64, run `AnyUSB-0.1.2-Windows-x64.exe` and open
   **AnyUSB** from Start. Initial setup downloads usbipd-win 5.3.0 and usbip-win2
   0.9.8.1 if they are missing. It validates the release digests and Windows
   signatures before running the driver installers. Complete a reboot if setup
   requests one. The AnyUSB setup executable itself is unsigned.
-- On Ubuntu 24.04 LTS amd64, open `anyusb_0.1.1_amd64.deb` in the graphical
+- On Ubuntu 24.04 LTS amd64, open `anyusb_0.1.2_amd64.deb` in the graphical
   package installer and open **AnyUSB** from the applications menu. The package
   installs the launcher and two systemd services. Ubuntu resolves missing
   system packages from its repositories.

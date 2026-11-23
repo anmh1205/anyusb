@@ -48,7 +48,9 @@ paths and argument arrays. Preserve exit code and stderr for diagnostics and
 normalize known errors such as absent, busy, permission denied, and unsupported.
 Enumerate imported devices separately to prevent exporting them again. On Windows,
 use the virtual port reported by the import backend to find the corresponding PnP
-device and its interface handles. [Linux tooling](https://github.com/torvalds/linux/blob/master/tools/usb/usbip/README), [Windows host automation](https://github.com/dorssel/usbipd-win/wiki/Automation), [Windows client CLI](https://github.com/vadimgrn/usbip-win2/blob/v.0.9.8.1/userspace/usbip/usbip.cpp)
+device and its interface handles. The usbip-win2 hub port is matched to the PnP
+device address below its emulated root hub, so identical VID/PID devices still
+resolve to their own COM ports. [Linux tooling](https://github.com/torvalds/linux/blob/master/tools/usb/usbip/README), [Windows host automation](https://github.com/dorssel/usbipd-win/wiki/Automation), [Windows client CLI](https://github.com/vadimgrn/usbip-win2/blob/v.0.9.8.1/userspace/usbip/usbip.cpp)
 
 ## Control plane and leases
 
@@ -73,6 +75,13 @@ An active flash keeps the device reserved until the subprocess exits and serial
 ownership is reconciled, including when its initiating client disconnects.
 After an agent restart, reconcile unknown exports and sessions before opening a
 local port or granting a managed lease.
+
+The importing agent persists the operator's desired peer/device attachment, not
+the short-lived remote lease ID or USB bus ID. It recreates the lease, loopback
+tunnel, and native import after its own restart and keeps retrying while the
+peer, network, or device is absent. An explicit disconnect removes that desired
+attachment. This keeps recovery automatic without treating a stale native
+virtual port as proof that a current lease still exists.
 
 ### TCP 3240 access by backend
 

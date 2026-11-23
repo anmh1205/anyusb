@@ -3,11 +3,15 @@ package mesh
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -229,8 +233,16 @@ func TestManagedPairLeaseAndReconnect(t *testing.T) {
 		views := client.connectionViews()
 		return len(views) == 1 && views[0].Import != nil && views[0].Import.RemoteBusID == "1-4"
 	})
-	if _, err := second.connect(ctx, competitor, "board"); !isHTTPStatus(err, http.StatusConflict) {
-		t.Fatalf("second USB/IP client = %v", err)
+	competing, err := second.connect(ctx, competitor, "board")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEventually(t, "second USB/IP client reports the busy lease", func() bool {
+		views := second.connectionViews()
+		return len(views) == 1 && views[0].Error != ""
+	})
+	if err := second.disconnect(ctx, competing.ID); err != nil {
+		t.Fatal(err)
 	}
 	if _, _, err := host.BeginESP(ctx, client.id, "board", ""); !errors.Is(err, platform.ErrConflict) {
 		t.Fatalf("ESP while USB/IP attached = %v", err)
@@ -268,8 +280,16 @@ func TestManagedPairLeaseAndReconnect(t *testing.T) {
 	if _, err := host.RawShare(ctx, "2-9", true); !errors.Is(err, platform.ErrConflict) {
 		t.Fatalf("raw export bypassed the ESP lease: %v", err)
 	}
-	if _, err := second.connect(ctx, competitor, "board"); !isHTTPStatus(err, http.StatusConflict) {
-		t.Fatalf("USB/IP while ESP busy = %v", err)
+	competing, err = second.connect(ctx, competitor, "board")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEventually(t, "USB/IP retry waits while ESP owns the device", func() bool {
+		views := second.connectionViews()
+		return len(views) == 1 && views[0].Error != ""
+	})
+	if err := second.disconnect(ctx, competing.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -281,6 +301,146 @@ func TestTunnelImportHeader(t *testing.T) {
 	good[3] = 5
 	if validImport(good, "1-4") {
 		t.Fatal("accepted a non-import request")
+	}
+}
+
+func TestConnectionIntentSurvivesAgentRestart(t *testing.T) {
+	dir := t.TempDir()
+	peer := Peer{ID: strings.Repeat("a", 64), Name: "offline peer", Endpoint: "127.0.0.1:1"}
+
+	firstContext, stopFirst := context.WithCancel(t.Context())
+	first, err := New(firstContext, &testAdapter{}, dir, "first", "", "127.0.0.1:3240")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.mu.Lock()
+	if err := first.addPeerLocked(peer); err != nil {
+		first.mu.Unlock()
+		t.Fatal(err)
+	}
+	first.mu.Unlock()
+	created, err := first.connect(t.Context(), peer, "board")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.mu.Lock()
+	oldSession := first.connections[created.ID]
+	first.mu.Unlock()
+	if oldSession == nil {
+		t.Fatal("connection worker was not created")
+	}
+	stopFirst()
+	select {
+	case <-oldSession.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first connection worker did not stop")
+	}
+
+	secondContext, stopSecond := context.WithCancel(t.Context())
+	defer stopSecond()
+	second, err := New(secondContext, &testAdapter{}, dir, "second", "", "127.0.0.1:3240")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := second.connectionViews()
+	if len(restored) != 1 || restored[0].ID != created.ID || restored[0].Peer != peer.ID || restored[0].Device != "board" {
+		t.Fatalf("restored connections = %+v", restored)
+	}
+	if err := second.disconnect(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if views := second.connectionViews(); len(views) != 0 {
+		t.Fatalf("disconnected intent still active: %+v", views)
+	}
+
+	state, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved config
+	if err := json.Unmarshal(state, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Connections) != 0 {
+		t.Fatalf("disconnected intent still persisted: %+v", saved.Connections)
+	}
+}
+
+func TestRestoredConnectionReattachesAfterAgentRestart(t *testing.T) {
+	backend, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	go func() {
+		for {
+			conn, err := backend.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				var request [40]byte
+				if _, err := io.ReadFull(conn, request[:]); err != nil || !validImport(request, "1-4") {
+					return
+				}
+				_, _ = conn.Write([]byte{0x01, 0x11, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00})
+				_, _ = io.Copy(io.Discard, conn)
+			}()
+		}
+	}()
+
+	hostAdapter := &testAdapter{device: platform.Device{ID: "board", BusID: "1-4", VendorID: "303a", ProductID: "1001", Serial: "lab"}}
+	host, address := nodeForTest(t, t.Context(), hostAdapter, backend.Addr().String())
+	if err := host.setShared(t.Context(), "board", true); err != nil {
+		t.Fatal(err)
+	}
+	invite, err := host.newInvite()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	clientAdapter := &testAdapter{}
+	firstContext, stopFirst := context.WithCancel(t.Context())
+	first, err := New(firstContext, clientAdapter, dir, "client", "", backend.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := first.pair(t.Context(), address, invite.Code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := first.connect(t.Context(), peer, "board")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEventually(t, "first agent attached", func() bool {
+		views := first.connectionViews()
+		return len(views) == 1 && views[0].State == "attached"
+	})
+	first.mu.Lock()
+	oldSession := first.connections[created.ID]
+	first.mu.Unlock()
+	stopFirst()
+	select {
+	case <-oldSession.done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("first agent did not release its import")
+	}
+
+	secondContext, stopSecond := context.WithCancel(t.Context())
+	defer stopSecond()
+	second, err := New(secondContext, clientAdapter, dir, "client", "", backend.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireEventually(t, "restored agent reattached", func() bool {
+		views := second.connectionViews()
+		return len(views) == 1 && views[0].ID == created.ID && views[0].State == "attached"
+	})
+	if err := second.disconnect(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -318,12 +478,13 @@ func TestFollowLeaseKeepsImportThroughTemporaryRenewalFailure(t *testing.T) {
 	defer cancel()
 	session := &connection{
 		Connection: Connection{ID: lease.ID},
-		peer:       Peer{Endpoint: server.Listener.Addr().String()},
-		listener:   listener,
 		cancel:     cancel,
 		done:       make(chan struct{}),
 	}
-	go node.followLease(ctx, session, server.Client(), lease)
+	go func() {
+		_ = node.followLease(ctx, session, server.Client(), Peer{Endpoint: server.Listener.Addr().String()}, lease, listener)
+		close(session.done)
+	}()
 	select {
 	case <-retried:
 	case <-time.After(5 * time.Second):

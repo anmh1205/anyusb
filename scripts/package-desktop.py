@@ -165,7 +165,7 @@ def main():
     for name in ("checksums", "windows-electron", "linux-electron", "makensis"):
         parser.add_argument("--" + name, type=lambda v: Path(v).resolve(), required=True)
     parser.add_argument("--output", type=lambda v: Path(v).resolve(), default=ROOT / "dist" / "desktop")
-    parser.add_argument("--version", default="0.1.1")
+    parser.add_argument("--version", default="0.1.2")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version):
         parser.error("version must be major.minor.patch")

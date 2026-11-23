@@ -1,6 +1,6 @@
 # 0004. Lease-aware reconnect
 
-**Proposed at M0.**
+**Accepted and implemented.**
 
 Reconcile hotplug notifications against live backend state. Use a bounded
 inventory poll as a fallback for missed events. On disappearance, mark the
@@ -14,6 +14,13 @@ Deduplicate retries, make them cancellable, and resolve the resulting COM/tty
 from OS inventory before reporting the device usable. Release, expiry, and mode
 changes invalidate stale work. Keep mode changes, passthrough reattach, and
 competing local serial opens blocked while a flash job owns the device.
+
+Persist a stable local connection intent containing only peer and device IDs.
+Do not persist the lease ID, loopback relay port, remote busid, or client virtual
+port. Recreate those transient values after an agent restart. A failed initial
+attach remains a visible, cancellable connection and retries with a bounded
+backoff; explicit disconnect removes the intent before it tears down the native
+import so a crash cannot unexpectedly restore a connection the operator removed.
 
 `usbip-win2` documents background retries after a lost connection and a
 30-second first retry in that case. Use an agent-owned retry schedule for the

@@ -7,6 +7,10 @@
   native USB/IP.
 - Display the detected local COM or tty port for use in VS Code and other IDEs.
   Desktop installations run in USB forwarding mode.
+- Remember requested USB attachments across service restarts and keep retrying
+  until the remote machine and device return or the operator disconnects it.
+- Map Windows COM ports through the exact usbip-win2 virtual hub port, including
+  multiple imported devices with the same VID and PID.
 
 - Kept active managed USB/IP imports through brief lease-renewal interruptions.
   A new import still requires a confirmed lease and current bus ID.

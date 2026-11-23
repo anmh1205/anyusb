@@ -134,7 +134,7 @@ class Matrix:
     def __init__(self, host, client):
         self.host, self.client = host, client
         self.transfers = itertools.count(1)
-        self.lease = None
+        self.connection = None
         self.failures = []
 
     def profile(self, name):
@@ -180,14 +180,14 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
 
     def attached(self):
         links = self.client.cli("list", "--connections")
-        require(len(links) == 1 and links[0]["id"] == self.lease and links[0]["state"] == "attached",
+        require(len(links) == 1 and links[0]["id"] == self.connection and links[0]["state"] == "attached",
                 f"connection state: {links}")
         return self.tty()
 
     def lost(self):
         links = self.client.cli("list", "--connections")
-        require(len(links) == 1 and links[0]["id"] == self.lease and links[0]["state"] != "attached",
-                f"expected the retained lease to lose its import: {links}")
+        require(len(links) == 1 and links[0]["id"] == self.connection and links[0]["state"] != "attached",
+                f"expected the retained connection to lose its import: {links}")
         return links[0]["state"]
 
     def clear(self):
@@ -199,16 +199,16 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
 
     def connect(self):
         started = time.monotonic()
-        self.lease = self.client.cli("connect", "--peer", self.peer, self.id)["id"]
+        self.connection = self.client.cli("connect", "--peer", self.peer, self.id)["id"]
         tty = eventually(self.attached, 28)
         log(f"managed attach: {tty} after {elapsed(started)} ms")
         return tty
 
     def disconnect(self):
-        if self.lease is not None:
-            self.client.cli("disconnect", "--lease", self.lease)
+        if self.connection is not None:
+            self.client.cli("disconnect", "--connection", self.connection)
             eventually(self.clear)
-            self.lease = None
+            self.connection = None
 
     def transfer(self, tty, size):
         index = next(self.transfers)
@@ -313,15 +313,22 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
         return bus, self.client.run("cat " + shlex.quote(f"/sys/bus/usb/devices/{bus}/devnum"))
 
     def expiry(self):
-        old = self.lease
+        old = self.connection
         self.profile("blackhole")
         time.sleep(40)
-        eventually(self.clear, 10)
-        log("40 s partition: host export, client import and old lease cleaned up before link restoration")
+        def expired():
+            imports = self.client.cli("list", "--imports")
+            links = self.client.cli("list", "--connections")
+            shared = self.host.cli("list", "--shared")
+            require(not imports and len(links) == 1 and links[0]["id"] == old and links[0]["state"] == "reconnecting"
+                    and len(shared) == 1 and not shared[0].get("lease_owner") and not shared[0].get("exported", False),
+                    f"expiry cleanup: {imports=}, {links=}, {shared=}")
+        eventually(expired, 10)
+        log("40 s partition: remote lease, host export and native import cleaned up; connection intent kept retrying")
         self.profile("mobile")
-        self.transfer(self.connect(), 4096)
-        require(old != self.lease, "an expired lease was reused")
-        log("explicit reconnect after expiry obtained a new lease")
+        self.transfer(eventually(self.attached, 30), 4096)
+        require(old == self.connection, "automatic recovery replaced the saved connection intent")
+        log("automatic recovery after expiry obtained a new remote lease without operator input")
 
     def case(self, name, action):
         log(f"CASE {name}")

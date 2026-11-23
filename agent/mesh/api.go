@@ -255,8 +255,18 @@ func (n *Node) revoke(id string) error {
 		return nil
 	}
 	delete(n.config.Peers, id)
+	removedConnections := make(map[string]connectionIntent)
+	for key, intent := range n.config.Connections {
+		if intent.Peer == id {
+			removedConnections[key] = intent
+			delete(n.config.Connections, key)
+		}
+	}
 	if err := n.saveLocked(); err != nil {
 		n.config.Peers[id] = peer
+		for key, intent := range removedConnections {
+			n.config.Connections[key] = intent
+		}
 		return err
 	}
 	for key, req := range n.approvals {

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -94,6 +95,7 @@ type deviceState struct {
 type pnpDevice struct {
 	InstanceID, Location, Port string
 	Virtual                    bool
+	VirtualPort                int
 }
 
 const pnpScript = `
@@ -112,18 +114,36 @@ function Test-Win2Ancestry([string] $id) {
     }
     return $false
 }
+function Get-Win2Port([string] $id) {
+    for ($i = 0; $id -and $i -lt 12; $i++) {
+        if (!$parents.ContainsKey($id)) {
+            $parents[$id] = (Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_Parent -ErrorAction SilentlyContinue).Data
+        }
+        $parent = [string]$parents[$id]
+        if ($parent.StartsWith('USB\ROOT_HUB', [StringComparison]::OrdinalIgnoreCase) -and (Test-Win2Ancestry $parent)) {
+            $value = (Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_Address -ErrorAction SilentlyContinue).Data
+            $number = 0
+            if ([int]::TryParse([string]$value, [ref]$number) -and $number -gt 0) { return $number }
+            return 0
+        }
+        $id = $parent
+    }
+    return 0
+}
 $result = @(
     foreach ($rawId in $ids) {
         $id = [string]$rawId
         if ([string]::IsNullOrEmpty($id)) { continue }
         $paths = Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_LocationPaths -ErrorAction SilentlyContinue
-        [pscustomobject]@{InstanceID=$id; Location=[string](@($paths.Data | Sort-Object)[0]); Port=''; Virtual=(Test-Win2Ancestry $id)}
+        $virtual = Test-Win2Ancestry $id
+        [pscustomobject]@{InstanceID=$id; Location=[string](@($paths.Data | Sort-Object)[0]); Port=''; Virtual=$virtual; VirtualPort=$(if ($virtual) { Get-Win2Port $id } else { 0 })}
     }
     foreach ($dev in $com) {
         if ($dev.FriendlyName -match '\((COM\d+)\)') {
             $port = $Matches[1]
             $paths = Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_LocationPaths -ErrorAction SilentlyContinue
-            [pscustomobject]@{InstanceID=[string]$dev.InstanceId; Location=[string](@($paths.Data | Sort-Object)[0]); Port=[string]$port; Virtual=(Test-Win2Ancestry $dev.InstanceId)}
+            $virtual = Test-Win2Ancestry $dev.InstanceId
+            [pscustomobject]@{InstanceID=[string]$dev.InstanceId; Location=[string](@($paths.Data | Sort-Object)[0]); Port=[string]$port; Virtual=$virtual; VirtualPort=$(if ($virtual) { Get-Win2Port $dev.InstanceId } else { 0 })}
         }
     }
 )
@@ -353,6 +373,16 @@ func mapImportCOM(imports []platform.Import, devices []pnpDevice) {
 		}
 	}
 	for i := range imports {
+		for _, port := range devices {
+			if port.Virtual && port.Port != "" && port.VirtualPort == imports[i].Port {
+				imports[i].SerialPorts = append(imports[i].SerialPorts, port.Port)
+			}
+		}
+		if len(imports[i].SerialPorts) != 0 {
+			slices.Sort(imports[i].SerialPorts)
+			imports[i].SerialPorts = slices.Compact(imports[i].SerialPorts)
+			continue
+		}
 		ids := importedID.FindStringSubmatch(imports[i].Name)
 		if ids == nil {
 			continue
@@ -367,6 +397,8 @@ func mapImportCOM(imports []platform.Import, devices []pnpDevice) {
 				imports[i].SerialPorts = append(imports[i].SerialPorts, port.Port)
 			}
 		}
+		slices.Sort(imports[i].SerialPorts)
+		imports[i].SerialPorts = slices.Compact(imports[i].SerialPorts)
 	}
 }
 
