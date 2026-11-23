@@ -1,0 +1,133 @@
+AnyUSB retry over direct Tailscale
+client boot:
+[    0.024000] ..MP-BIOS bug: 8254 timer not connected to IO-APIC
+6.12.117+deb13-amd64
+usbip (usbip-utils 2.0)
+AnyUSB lab control ready
+esptool v5.2.0
+5.2.0
+PASS mTLS pairing directly over Tailscale
+PASS authenticated peer API over the physical network
+Board at bus 1-2.2 incarnation 1-2.2/59
+Host USB device number 59
+esptool v5.2.0
+Serial port /dev/ttyACM0:
+Connecting...
+Detecting chip type... ESP32-S3
+Connected to ESP32-S3 on /dev/ttyACM0:
+Chip type:          ESP32-S3 (QFN56) (revision v0.2)
+Features:           Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, Embedded PSRAM 8MB (AP_3v3)
+Crystal frequency:  40MHz
+USB mode:           USB-Serial/JTAG
+MAC:                [MAC]
+
+Uploading stub flasher...
+Running stub flasher...
+Stub flasher running.
+
+MAC:                [MAC]
+
+Hard resetting via RTS pin...
+PASS AnyUSB Remote ESP chip-id
+Host USB device number 60
+esptool v5.2.0
+Serial port /dev/ttyACM0:
+Connecting...
+Detecting chip type... ESP32-S3
+Connected to ESP32-S3 on /dev/ttyACM0:
+Chip type:          ESP32-S3 (QFN56) (revision v0.2)
+Features:           Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, Embedded PSRAM 8MB (AP_3v3)
+Crystal frequency:  40MHz
+USB mode:           USB-Serial/JTAG
+MAC:                [MAC]
+
+Uploading stub flasher...
+Running stub flasher...
+Stub flasher running.
+
+Flash Memory Information:
+=========================
+Manufacturer: ef
+Device: 4018
+Detected flash size: 16MB
+Flash type set in eFuse: quad (4 data lines)
+Flash voltage set by eFuse: 3.3V
+
+Hard resetting via RTS pin...
+PASS AnyUSB Remote ESP reset
+PASS managed USB/IP physical attach: /dev/ttyACM0
+esptool v5.2.0
+Serial port /dev/ttyACM0:
+Connecting...
+Connected to ESP32-S3 on /dev/ttyACM0:
+Chip type:          ESP32-S3 (QFN56) (revision v0.2)
+Features:           Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, Embedded PSRAM 8MB (AP_3v3)
+Crystal frequency:  40MHz
+USB mode:           USB-Serial/JTAG
+MAC:                [MAC]
+
+
+MAC:                [MAC]
+
+Staying in bootloader.
+PASS managed USB/IP esptool read-mac
+esptool v5.2.0
+Serial port /dev/ttyACM0:
+Note: Pre-connection option "no-reset" was selected. Connection may fail if the chip is not in bootloader or flasher stub mode.
+Connecting...
+Note: Pre-connection option "no-reset" was selected. Connection may fail if the chip is not in bootloader or flasher stub mode.
+Connected to ESP32-S3 on /dev/ttyACM0:
+Chip type:          ESP32-S3 (QFN56) (revision v0.2)
+Features:           Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, Embedded PSRAM 8MB (AP_3v3)
+Crystal frequency:  40MHz
+USB mode:           USB-Serial/JTAG
+MAC:                [MAC]
+
+Uploading stub flasher...
+Running stub flasher...
+Stub flasher running.
+
+Flash Memory Information:
+=========================
+Manufacturer: ef
+Device: 4018
+Detected flash size: 16MB
+Flash type set in eFuse: quad (4 data lines)
+Flash voltage set by eFuse: 3.3V
+
+Hard resetting via RTS pin...
+PASS managed USB/IP esptool flash-id
+PASS stock USB/IP over tailnet SSH relay
+FAIL stock USB/IP serial probe: client command exited 2: esptool v5.2.0
+Serial port /dev/ttyACM0:
+
+A fatal error occurred: Could not open /dev/ttyACM0, the port is busy or doesn't exist.
+([Errno 2] could not open port /dev/ttyACM0: [Errno 2] No such file or directory: '/dev/ttyACM0')
+
+Hint: Check if the port is correct and ESP connected
+
+
+Stock USB/IP rerun over the Tailscale SSH relay
+client boot:
+6.12.117+deb13-amd64
+usbip (usbip-utils 2.0)
+AnyUSB lab control ready
+esptool v5.2.0
+5.2.0
+FAIL stock USB/IP attempt 1: client command exited 1: anyusb: USB device is busy or its state changed: attach completed but its port could not be confirmed; run anyusb list --imports: usbip port: context deadline exceeded
+FAIL stock USB/IP attempt 2: client command exited 1: anyusb: USB device is busy or its state changed: attach completed but its port could not be confirmed; run anyusb list --imports: usbip port: context deadline exceeded
+Stock USB/IP opened a CDC candidate /dev/ttyACM0 (host 1-2.2/76)
+FAIL stock USB/IP attempt 3: client command exited 2: esptool v5.2.0
+Serial port /dev/ttyACM0:
+
+A fatal error occurred: Could not open /dev/ttyACM0, the port is busy or doesn't exist.
+([Errno 2] could not open port /dev/ttyACM0: [Errno 2] No such file or directory: '/dev/ttyACM0')
+
+Hint: Check if the port is correct and ESP connected
+
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Temp\anyusb-kernel-lab\physical-stock-retry.py", line 122, in <module>
+    main()
+  File "C:\Users\Admin\AppData\Local\Temp\anyusb-kernel-lab\physical-stock-retry.py", line 120, in main
+    raise RuntimeError("stock USB/IP serial retry could not verify both reads")
+RuntimeError: stock USB/IP serial retry could not verify both reads

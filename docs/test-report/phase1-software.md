@@ -27,9 +27,9 @@ integration and race tests.
 
 The [virtual USB lab](virtual-usb-lab.md) records follow-up kernel USB/IP,
 serial, and Windows PnP checks from 2026-11-22.
-The [physical ESP32-S3 run](physical-esp32-tailnet.md) records a direct
-Tailscale pairing and USB/IP import on 2026-11-23, along with the serial
-failures observed on that board.
+The [physical ESP32-S3 run](physical-esp32-tailnet.md) records direct
+Tailscale pairing and USB/IP import on 2026-11-23, and the retry that
+completed chip and flash identification.
 
 ## Hardware acceptance
 

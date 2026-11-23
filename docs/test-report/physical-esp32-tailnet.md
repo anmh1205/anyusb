@@ -47,10 +47,38 @@ with status 2.
 
 [Hardware network test console](physical-esp32-tailnet-console.txt)
 
-The run establishes physical USB/IP attach and authenticated Tailscale
-transport. Stable serial IO, flash identity, flash writes and verification,
-OpenOCD JTAG, CP210x, and the native Windows USB/IP directions remain
-**UNVERIFIED**. The board's firmware was kept intact.
+The first run established physical USB/IP attach and authenticated Tailscale
+transport. It did not complete the serial or flash identity probes. The board's
+firmware was kept intact.
 
 Cleanup closed both temporary listeners and removed the test-loaded
 `usbip_host` module. The host again showed the board on `/dev/ttyACM0`.
+
+## Same-day retry on USB path `1-2.2`
+
+Ubuntu reported the same Espressif USB VID/PID at `1-2.2`. The journal
+still showed repeated removals at roughly eight-second intervals before the
+test. On a fresh enumeration (`devnum 59`), esptool `5.2.0` completed both
+host-local probes in sequence. The first used `--chip esp32s3 --before
+usb-reset --after no-reset --no-stub read-mac`. The second used `--chip
+esp32s3 --before no-reset --after hard-reset flash-id`. The ROM identified
+`ESP32-S3 (QFN56)`, revision `v0.2`, and the flash probe returned manufacturer
+ID `ef`, device ID `4018`, and capacity **16 MB**. Both commands exited 0.
+
+- **Remote ESP over direct Tailscale.** `anyusb chip-id` returned the chip MAC.
+  `anyusb reset` returned the same 16 MB flash identification and performed
+  the RTS hard reset. The host reported a new USB device number between the
+  two commands.
+- **Managed USB/IP over direct Tailscale.** The Linux client imported the
+  board, then ran the same two-command esptool sequence against its own
+  `/dev/ttyACM0`. Both reads passed and the flash identifiers matched the
+  host-local results.
+- **Stock USB/IP through SSH over Tailscale.** The first retry attached the
+  board, then the TTY disappeared before esptool could open it. In a separate
+  three-attempt run, two attaches timed out waiting for port confirmation and
+  the third TTY vanished before open. Stock serial read remains unverified.
+
+[Retry console](physical-esp32-tailnet-retry.txt)
+
+Firmware writes and verification, long-run USB stability, OpenOCD JTAG,
+CP210x, and the native Windows USB/IP directions remain **UNVERIFIED**.
