@@ -80,5 +80,7 @@ ID `ef`, device ID `4018`, and capacity **16 MB**. Both commands exited 0.
 
 [Retry console](physical-esp32-tailnet-retry.txt)
 
-Firmware writes and verification, long-run USB stability, OpenOCD JTAG,
+This retry covered identification and reset. A separate
+[ivts-firmware run](ivts-firmware-tailnet.md) verified project flashing,
+read-back verification, and boot. Long-run USB stability, OpenOCD JTAG,
 CP210x, and the native Windows USB/IP directions remain **UNVERIFIED**.

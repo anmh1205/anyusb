@@ -30,6 +30,8 @@ serial, and Windows PnP checks from 2026-11-22.
 The [physical ESP32-S3 run](physical-esp32-tailnet.md) records direct
 Tailscale pairing and USB/IP import on 2026-11-23, and the retry that
 completed chip and flash identification.
+The [ivts-firmware run](ivts-firmware-tailnet.md) records a remote flash,
+independent verification, and a boot log from a locally built project.
 
 ## Hardware acceptance
 
