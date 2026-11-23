@@ -1,46 +1,84 @@
 # AnyUSB desktop USB forwarding
 
-**2026-11-23 · AnyUSB 0.1.1 · source `3f95181`**
+**2026-11-23 · AnyUSB 0.1.2 · source `153c18f`**
 
-## Native operating system port
+## Native operating-system port and adverse networks
 
 Two QEMU guests used separate Debian `6.12.117+deb13-amd64` kernels and stock
-`usbip-utils 2.0`. The isolated Ethernet network ran on the Windows host's
-loopback. Both agents started with `-usb-only`. The exporter provided a CDC
-ACM gadget using the Linux USB gadget driver. The importer used `vhci_hcd` and
-`cdc_acm`. The agents used their normal managed USB/IP attach and detach API.
+`usbip-utils 2.0`. Both agents ran the 0.1.2 Linux amd64 binaries with
+`-usb-only` on an isolated Ethernet link. The exporter provided a CDC ACM
+gadget through `usbip-host`; the importer used `vhci_hcd` and `cdc_acm`. The
+acceptance probe opened `/dev/ttyACM0` independently of AnyUSB and compared
+deterministic SHA-256 payloads in both directions.
 
-- The client kernel created `/dev/ttyACM0` in 4.109 s after the connect
-  request. The independent `stty -F /dev/ttyACM0 115200` command opened it.
-  The serial use test then verified 65,536 bytes in each direction.
-- After a virtual unplug and replug, AnyUSB restored the same managed lease
-  while the link was configured for 90 ms ± 25 ms, 3% loss, and 3 Mbit/s per
-  direction. The serial test reopened the port and verified 4,096 bytes in
-  each direction. Recovery took 13.156 s from replug to verified data.
-- Disconnect removed the imported USB device and `/dev/ttyACM0` on the client.
+The complete second run ended with `AnyUSB NETWORK LAB RESULT=0`:
 
-## App and packages
+- Stock USB/IP transferred 32,768 bytes each way before the managed tests.
+- Managed attach and 65,536-byte bidirectional transfer passed on clean, LAN,
+  WAN, mobile, severe and asymmetric profiles. The most adverse symmetric
+  profile was 200 ms ± 60 ms, 5% loss and 1 Mbit/s per direction. Initial
+  attach-to-tty times in this TCG run ranged from 6.687 to 18.469 seconds.
+- Three virtual unplug/replug cycles on 90 ms ± 25 ms, 3% loss and 3 Mbit/s
+  restored the same saved connection and verified 4,096 bytes each way in
+  12.671–13.500 seconds from replug.
+- A three-second 100% packet-loss interval during a 262,144-byte transfer kept
+  the original native import and completed after the network returned.
+- A 12-second 100% loss interval changed the connection to `lost`, detached the
+  stale import, reattached it and verified data after restoration.
+- Forcibly deleting the established peer TCP sockets created a fresh native
+  import and verified data.
+- During a 40-second partition, the remote lease, host export and local native
+  import were removed while the stable connection intent remained
+  `reconnecting`. Restoring the link acquired a new remote lease, recreated
+  `/dev/ttyACM0` and verified data without another connect request.
+- Explicit disconnect removed the saved intent, native import, host lease and
+  export.
 
-- The Windows Electron app was exercised with real agent pairing and USB/IP
-  tunnel code and a fixture adapter that reported `COM7` after a delay. The
-  connection card updated when the port appeared and cleared it on disconnect.
-  The firmware file input and firmware picker IPC were absent.
-- `go test ./...`, `go vet ./...`, and the targeted Go race test for
-  `agent/mesh`, `web`, and `cli` passed. Go binaries were built for Windows and
-  Linux on amd64 and arm64. Desktop installers target x64.
-- Both installers were extracted and validated. Windows packaging omitted
-  the embedded Python runtime, and Ubuntu packaging omitted the ESP wheels
-  and the Python venv dependency. The Ubuntu systemd unit uses `-usb-only`.
+The first 0.1.2 run passed every earlier case and failed only the old 40-second
+acceptance assertion, which expected the connection record itself to disappear.
+The retained `reconnecting` record was the new intended behavior; the revised
+assertion then passed the complete second run and required automatic byte-level
+recovery.
 
-The previous test on real ESP32-S3 hardware verified that a Linux client
-opened its USB/IP `/dev/ttyACM0` and saw the project's boot log.
-[Physical ESP32-S3 run](ivts-firmware-tailnet.md)
+## Service restart, Windows mapping and UI
 
-**UNVERIFIED** on this release. Windows COM enumeration with the physical
-ESP32-S3, the IDE's selection and flash flow on that Windows COM port, and
-privileged installation on a clean Windows or Ubuntu system.
+- An integration test stopped a connected importing agent, started a new agent
+  from the same state directory, and observed automatic reattach with the same
+  stable connection ID. A separate offline-peer test verified persistence and
+  that explicit disconnect removed the stored intent.
+- The Windows PnP test models the actual usbip-win2 hierarchy and maps COM ports
+  through the exact virtual hub port. Two identical `303a:1001` devices on
+  virtual ports 3 and 4 resolved independently to `COM8` and `COM11`.
+- `go test ./...`, `go vet ./...`, and `go test -race` for `agent/mesh`, `web`
+  and `cli` passed. Go binaries built for Windows and Linux on amd64 and arm64.
+- A live packaged Electron run completed share, on-screen pairing, connect,
+  delayed `COM7` enumeration and disconnect. It confirmed that no firmware file
+  picker or ESP panel is exposed. The inspected screenshot is
+  `dist/desktop/previews/anyusb-0.1.2-usb.png`.
+
+## Packages
+
+Both finished packages were extracted and inspected. The Windows payload has
+the 0.1.2 Electron app and Go service/CLI, with no Python or esptool payload.
+The Ubuntu unit starts `/usr/bin/anyusbd -usb-only`; its payload also has no
+Python or esptool runtime. The Windows AnyUSB setup executable remains unsigned;
+the setup script separately verifies the hashes and Authenticode signatures of
+the upstream driver installers it downloads.
 
 | Package | SHA-256 |
 | --- | --- |
-| `AnyUSB-0.1.1-Windows-x64.exe` | `f15f9aa6788579494110a85c73921fb2d5dd629b14695240f7d5210ed68122aa` |
-| `anyusb_0.1.1_amd64.deb` | `f4903153ccef9d338353500f1d56cf061061070b1c7d8e085eb9500a411fd419` |
+| `AnyUSB-0.1.2-Windows-x64.exe` | `442aab369b5a1a9ae3f10a276741bb3f147529faafc1bb925f4f40f5c88c6863` |
+| `anyusb_0.1.2_amd64.deb` | `51ebe035b97652ee5336a8313cd179128e5e6c4d8837d26169585851bde9c372` |
+
+## Remaining physical acceptance
+
+The previously recorded physical ESP32-S3 run proved that a Linux importer
+opened its USB/IP `/dev/ttyACM0` and received the project boot log; see
+[Physical ESP32-S3 run](ivts-firmware-tailnet.md).
+
+**UNVERIFIED on 0.1.2:** native Windows COM enumeration with the physical
+ESP32-S3, selecting that COM port and flashing from VS Code/Arduino IDE, and
+privileged installation on clean Windows and Ubuntu systems. At the end of this
+run, the named Ubuntu hardware peer was offline on Tailscale and timed out on
+SSH. The local Windows host exposed only legacy `COM1` and had no AnyUSB or
+USB/IP driver services installed, so no physical Windows claim is made.
