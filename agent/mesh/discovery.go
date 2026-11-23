@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -30,48 +31,99 @@ type Discovered struct {
 	Network  string `json:"network"`
 }
 
-func (n *Node) Advertise(port int) (*mdns.Server, error) {
-	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("invalid mDNS port")
-	}
+type lanInterface struct {
+	device    net.Interface
+	addresses []net.IP
+}
+
+func lanInterfaces() ([]lanInterface, error) {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil, err
 	}
-	var ips []net.IP
+	var result []lanInterface
 	for _, iface := range interfaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+		const required = net.FlagUp | net.FlagMulticast
+		if iface.Flags&required != required || iface.Flags&net.FlagLoopback != 0 {
 			continue
 		}
 		addresses, err := iface.Addrs()
 		if err != nil {
 			continue
 		}
+		var ips []net.IP
 		for _, addr := range addresses {
 			ip, _, err := net.ParseCIDR(addr.String())
-			if err == nil && ip.IsGlobalUnicast() {
+			native, ok := netip.AddrFromSlice(ip)
+			if err == nil && ok && ip.IsGlobalUnicast() && !tailnetV4.Contains(native.Unmap()) && !tailnetV6.Contains(native) {
 				ips = append(ips, ip)
 			}
 		}
+		if len(ips) != 0 {
+			result = append(result, lanInterface{device: iface, addresses: ips})
+		}
 	}
-	if len(ips) == 0 {
-		return nil, fmt.Errorf("no LAN addresses available for mDNS")
+	return result, nil
+}
+
+func (n *Node) Advertise(port int) (func(), error) {
+	if port < 1 || port > 65535 {
+		return nil, fmt.Errorf("invalid mDNS port")
 	}
-	service, err := mdns.NewMDNSService(n.id[:12], mdnsService, "local.", n.id[:12]+".local.", port, ips, []string{"id=" + n.id, "name=" + n.name})
+	interfaces, err := lanInterfaces()
 	if err != nil {
 		return nil, err
 	}
-	return mdns.NewServer(&mdns.Config{Zone: service})
+	var servers []*mdns.Server
+	for _, iface := range interfaces {
+		service, err := mdns.NewMDNSService(n.id[:12], mdnsService, "local.", n.id[:12]+".local.", port, iface.addresses, []string{"id=" + n.id, "name=" + n.name})
+		if err != nil {
+			continue
+		}
+		if server, err := mdns.NewServer(&mdns.Config{Zone: service, Iface: &iface.device}); err == nil {
+			servers = append(servers, server)
+		}
+	}
+	if len(servers) == 0 {
+		return nil, fmt.Errorf("no multicast LAN interface available for mDNS")
+	}
+	return func() {
+		for _, server := range servers {
+			_ = server.Shutdown()
+		}
+	}, nil
 }
 
 func Discover(ctx context.Context) ([]Discovered, error) {
+	interfaces, err := lanInterfaces()
+	if err != nil {
+		return nil, err
+	}
 	entries := make(chan *mdns.ServiceEntry, 32)
-	params := mdns.DefaultParams(mdnsService)
-	params.Entries = entries
-	params.Timeout = 1500 * time.Millisecond
-	params.WantUnicastResponse = true
-	done := make(chan error, 1)
-	go func() { done <- mdns.Query(params); close(entries) }()
+	logger := log.New(io.Discard, "", 0)
+	var queries sync.WaitGroup
+	for _, iface := range interfaces {
+		queries.Add(1)
+		go func() {
+			defer queries.Done()
+			params := mdns.DefaultParams(mdnsService)
+			params.Interface = &iface.device
+			params.Entries = entries
+			params.Logger = logger
+			params.Timeout = 1500 * time.Millisecond
+			params.WantUnicastResponse = true
+			params.DisableIPv4, params.DisableIPv6 = true, true
+			for _, ip := range iface.addresses {
+				if ip.To4() != nil {
+					params.DisableIPv4 = false
+				} else {
+					params.DisableIPv6 = false
+				}
+			}
+			_ = mdns.QueryContext(ctx, params)
+		}()
+	}
+	go func() { queries.Wait(); close(entries) }()
 	result := make([]Discovered, 0)
 	seen := make(map[string]bool)
 	for {
@@ -80,7 +132,7 @@ func Discover(ctx context.Context) ([]Discovered, error) {
 			return nil, ctx.Err()
 		case item, open := <-entries:
 			if !open {
-				return result, <-done
+				return result, nil
 			}
 			if item == nil {
 				continue

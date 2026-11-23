@@ -126,11 +126,11 @@ func run(parent context.Context, opt options) error {
 		if opt.mdns {
 			_, rawPort, _ := net.SplitHostPort(peer.Addr().String())
 			port, _ := strconv.Atoi(rawPort)
-			server, err := node.Advertise(port)
+			stopAdvertising, err := node.Advertise(port)
 			if err != nil {
 				log.Printf("mDNS unavailable: %v", err)
 			} else {
-				defer server.Shutdown()
+				defer stopAdvertising()
 			}
 		}
 	}
