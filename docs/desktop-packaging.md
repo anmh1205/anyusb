@@ -7,6 +7,8 @@
   0.9.8.1 if they are missing. It validates the release digests and Windows
   signatures before running the driver installers. Complete a reboot if setup
   requests one. The AnyUSB setup executable itself is unsigned.
+  Running a newer installer upgrades AnyUSB in place and preserves the saved
+  pairing, sharing and connection state.
 - On Ubuntu 24.04 LTS amd64, open `anyusb_0.1.2_amd64.deb` in the graphical
   package installer and open **AnyUSB** from the applications menu. The package
   installs the launcher and two systemd services. Ubuntu resolves missing

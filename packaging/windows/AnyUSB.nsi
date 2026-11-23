@@ -41,12 +41,26 @@ Function .onInit
   nsExec::Exec '"$SYSDIR\sc.exe" query anyusbd'
   Pop $0
   ${If} $0 == "0"
-    MessageBox MB_ICONSTOP "AnyUSB đã được cài. Hãy đóng các tác vụ và gỡ bản cũ trong Settings trước khi cài bản này."
-    Abort
+    StrCpy $R9 "1"
+  ${Else}
+    StrCpy $R9 "0"
   ${EndIf}
 FunctionEnd
 
 Section "AnyUSB"
+  nsExec::Exec '"$SYSDIR\taskkill.exe" /IM AnyUSB-Desktop.exe /T /F'
+  Pop $0
+  ${If} $R9 == "1"
+    DetailPrint "Đang dừng dịch vụ AnyUSB để nâng cấp tại chỗ…"
+    nsExec::ExecToLog '"$SYSDIR\sc.exe" stop anyusbd'
+    Pop $0
+    nsExec::ExecToLog '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command "(Get-Service -Name anyusbd).WaitForStatus([System.ServiceProcess.ServiceControllerStatus]::Stopped,[TimeSpan]::FromSeconds(15))"'
+    Pop $0
+    ${If} $0 != "0"
+      MessageBox MB_ICONSTOP "Không dừng được dịch vụ AnyUSB để nâng cấp. Hãy đóng tác vụ đang dùng USB rồi thử lại."
+      Abort
+    ${EndIf}
+  ${EndIf}
   SetOutPath "$INSTDIR"
   File /r "${PAYLOAD}\*.*"
   DetailPrint "Đang cài dịch vụ AnyUSB và driver USB/IP…"
@@ -55,6 +69,10 @@ Section "AnyUSB"
   ${If} $0 == "3010"
     SetRebootFlag true
   ${ElseIf} $0 != "0"
+    ${If} $R9 == "1"
+      nsExec::Exec '"$SYSDIR\sc.exe" start anyusbd'
+      Pop $1
+    ${EndIf}
     MessageBox MB_ICONSTOP "Không cài được dịch vụ hoặc driver. Xem phần chi tiết trong bộ cài."
     Abort
   ${EndIf}

@@ -12,8 +12,13 @@ $build = (Resolve-Path -LiteralPath $BuildDirectory).Path
 foreach ($file in @('anyusbd.exe', 'anyusb.exe')) {
     if (!(Test-Path -LiteralPath (Join-Path $build $file) -PathType Leaf)) { throw "Missing $file" }
 }
-if (Get-Service -Name anyusbd -ErrorAction SilentlyContinue) {
-    throw 'The anyusbd service already exists. Use the current installation or remove that service before a fresh install.'
+$existingService = Get-Service -Name anyusbd -ErrorAction SilentlyContinue
+if ($existingService -and !$DesktopInstaller) {
+    throw 'The anyusbd service already exists. Stop and remove it before using the manual installation script.'
+}
+if ($existingService -and $existingService.Status -ne 'Stopped') {
+    Stop-Service -Name anyusbd -Force
+    (Get-Service -Name anyusbd).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
 }
 $architecture = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
 if ($DesktopInstaller -and $PeerSources.Count -eq 0) {
@@ -76,8 +81,12 @@ if (!$KeepStockUsbipRule) {
 }
 if ($PeerSources.Count -gt 0) {
     $old = Get-NetFirewallRule -Name 'AnyUSB-Peer' -ErrorAction SilentlyContinue
-    if ($old) { throw 'An AnyUSB-Peer firewall rule already exists. Review the existing scope.' }
-    New-NetFirewallRule -Name 'AnyUSB-Peer' -DisplayName 'AnyUSB peer HTTPS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47443 -RemoteAddress $PeerSources | Out-Null
+    if ($old -and !$DesktopInstaller) { throw 'An AnyUSB-Peer firewall rule already exists. Review the existing scope.' }
+    if (!$old) {
+        New-NetFirewallRule -Name 'AnyUSB-Peer' -DisplayName 'AnyUSB peer HTTPS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47443 -RemoteAddress $PeerSources | Out-Null
+    } else {
+        Write-Host 'Keeping the existing AnyUSB peer firewall scope during upgrade.'
+    }
 }
 
 $destination = Join-Path $env:ProgramFiles 'AnyUSB'
@@ -111,7 +120,12 @@ if ($Python) {
     if ($LASTEXITCODE -ne 0 -or $version -notcontains '5.2.0') { throw 'The selected Python does not have esptool 5.2.0.' }
     $binary += ' -python "' + $pythonPath + '"'
 }
-New-Service -Name anyusbd -DisplayName 'AnyUSB Agent' -BinaryPathName $binary -StartupType Automatic | Out-Null
+if ($existingService) {
+    & "$env:SystemRoot\System32\sc.exe" config anyusbd 'binPath=' $binary 'start=' 'auto' | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to update the existing anyusbd service.' }
+} else {
+    New-Service -Name anyusbd -DisplayName 'AnyUSB Agent' -BinaryPathName $binary -StartupType Automatic | Out-Null
+}
 Start-Service -Name anyusbd
 & (Join-Path $destination 'anyusb.exe') doctor
 if ($DesktopInstaller -and $restartNeeded) { exit 3010 }

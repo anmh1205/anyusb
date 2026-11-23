@@ -11,6 +11,8 @@
   until the remote machine and device return or the operator disconnects it.
 - Map Windows COM ports through the exact usbip-win2 virtual hub port, including
   multiple imported devices with the same VID and PID.
+- Upgrade the Windows desktop package in place while preserving pairing,
+  sharing, and requested connection state.
 
 - Kept active managed USB/IP imports through brief lease-renewal interruptions.
   A new import still requires a confirmed lease and current bus ID.
