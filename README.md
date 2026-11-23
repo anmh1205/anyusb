@@ -1,8 +1,7 @@
 # AnyUSB
 
 Share USB devices between Windows and Linux over LAN or Tailscale. AnyUSB
-orchestrates native USB/IP backends and runs remote ESP operations on the
-computer with the physical board.
+uses the operating system's USB/IP driver to attach a remote device locally.
 
 ## Desktop app
 
@@ -15,11 +14,14 @@ are generated in `dist/desktop/`.
 2. On the receiving computer, check that the displayed code matches and
    click **Mã trùng, đồng ý**. Pairing is saved on both computers.
 3. On the machine with the USB cable, click **Cho phép dùng** on the device.
-   On the other machine, click the paired machine and **Kết nối**. The device
-   card shows the serial port when the operating system exposes one.
-4. To use the host's ESP tools, disconnect that USB import and open **ESP**
-   on the device card. Choose the generated `flasher_args.json`, then use
-   **Nạp**, **Verify**, or **Mở Serial Monitor**.
+   On the machine running your IDE, pick the paired machine and click
+   **Kết nối**. AnyUSB attaches the USB device to that computer. For a USB
+   serial device, **Cổng trên máy này** shows its local COM or `/dev/tty*`
+   port once the driver has enumerated it.
+4. Select that port in your usual tool. In VS Code with ESP-IDF, run
+   **ESP-IDF: Select Port to Use**, then flash or open the monitor in VS Code.
+   In Arduino IDE, select the board and port and use **Upload** as usual.
+   [ESP-IDF port selection](https://docs.espressif.com/projects/vscode-esp-idf-extension/en/latest/connectdevice.html) · [Arduino IDE port selection](https://docs.arduino.cc/software/ide-v2/tutorials/getting-started/ide-v2-uploading-a-sketch/)
 
 The Windows installer prepares the service and signed upstream USB drivers;
 Windows may request a reboot. The Ubuntu package installs the app launcher,
@@ -28,8 +30,7 @@ users. Administrators can also use the CLI and script paths below.
 
 To build the installers, first build the Go binaries below, then run
 `python scripts/package-desktop.py --help` for the required Electron archives,
-release checksum list, NSIS compiler, Python embedded runtime, and esptool
-wheel sets. See [desktop packaging](docs/desktop-packaging.md).
+release checksum list, and NSIS compiler. See [desktop packaging](docs/desktop-packaging.md).
 
 ## Build
 
@@ -112,6 +113,9 @@ root-only Unix socket or administrator-only named pipe. Run `anyusb ui` and
 open the authorized loopback URL in a browser.
 
 ## Remote ESP
+
+The following CLI workflow runs on agents that have been separately configured
+for host-side esptool. The desktop installers configure USB forwarding for IDEs.
 
 Use a managed shared ESP device. Disconnect its USB/IP lease before starting
 an ESP operation. The host opens the serial port and runs the pinned esptool.

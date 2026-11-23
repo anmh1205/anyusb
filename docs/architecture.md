@@ -128,7 +128,9 @@ native USB. [ESP32-S3 USB Serial/JTAG](https://docs.espressif.com/projects/esp-i
 Serve the web UI on loopback with local authorization, origin checking and
 request forgery protection. The local devices view presents sharing and lease
 status. The remote devices view presents connection, recovery and disconnect
-controls. The ESP panel exposes flash, monitor and reset.
+controls. It displays any COM or tty ports detected on the importing machine so
+local applications can use them directly. Desktop packages start the service
+with `-usb-only`. Separately configured agents can expose the ESP CLI workflows.
 
 The CLI exposes `anyusb list`, `share`, `unshare`, `connect`, `disconnect`,
 `flash`, `monitor`, `reset`, and `doctor`. It calls the local agent so that the

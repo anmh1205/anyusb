@@ -96,6 +96,7 @@ if ($build.TrimEnd('\') -ne $destination.TrimEnd('\')) {
 $binary = '"' + (Join-Path $destination 'anyusbd.exe') + '"'
 if ($DesktopInstaller) {
     $binary += ' -desktop'
+    if (!$Python) { $binary += ' -usb-only' }
     if (!(Get-NetFirewallRule -Name 'AnyUSB-LAN-Discovery' -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -Name 'AnyUSB-LAN-Discovery' -DisplayName 'AnyUSB LAN discovery' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 5353 -RemoteAddress LocalSubnet -Program (Join-Path $destination 'anyusbd.exe') | Out-Null
     }

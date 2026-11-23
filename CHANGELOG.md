@@ -2,9 +2,11 @@
 
 ## Unreleased
 
-- Added a desktop UI and Windows and Ubuntu package builders. Daily use can
-  discover peers, approve pairing, share and connect USB, and choose an
-  ESP-IDF manifest from the app.
+- Added a desktop UI and Windows and Ubuntu package builders. The desktop app
+  discovers peers, approves pairing, and attaches shared USB devices using
+  native USB/IP.
+- Display the detected local COM or tty port for use in VS Code and other IDEs.
+  Desktop installations run in USB forwarding mode.
 
 - Kept active managed USB/IP imports through brief lease-renewal interruptions.
   A new import still requires a confirmed lease and current bus ID.

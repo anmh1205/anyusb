@@ -32,26 +32,6 @@
     <section id="pairing" hidden aria-label="Yêu cầu ghép cặp"><h2>Yêu cầu ghép cặp</h2><div id="requests"></div></section>
     <section id="local-section" aria-label="Thiết bị cắm vào máy này"><div id="local" class="devices"></div></section>
     <section id="remote-section" hidden aria-label="Thiết bị trên máy đã ghép cặp"><div id="remote" class="devices"></div></section>
-    <section id="esp-panel" hidden aria-label="Công cụ ESP">
-      <div class="section-head"><div><h2>Công cụ ESP</h2><p id="target"></p></div><button id="close-esp" type="button">Đóng</button></div>
-      <form id="esp-form">
-        <div class="toolbar"><label>Tốc độ baud <input name="baud" type="number" min="300" max="4000000" value="115200"></label>
-          <label>Cổng trên máy cắm USB <input name="port" placeholder="Tự chọn"></label>
-          <button type="button" data-op="chip-id">Đọc chip</button><button type="button" data-op="reset">Khởi động lại</button>
-          <button id="monitor" type="button">Mở Serial Monitor</button></div>
-        <div class="firmware-row"><button id="choose-firmware" type="button">Chọn flasher_args.json</button>
-          <span id="firmware-name">Chưa chọn firmware</span><button class="primary" type="button" data-op="flash">Nạp</button>
-          <button type="button" data-op="verify">Verify</button></div>
-        <input id="firmware-folder" type="file" webkitdirectory hidden>
-      </form>
-      <p id="esp-status" role="status" hidden></p>
-      <pre id="logs" aria-label="Nhật ký ESP" tabindex="0"></pre>
-      <form id="serial" class="toolbar" hidden>
-        <label>Dữ liệu gửi <input name="text" autocomplete="off"></label><button>Gửi</button>
-        <label class="check"><input name="dtr" type="checkbox"> DTR</label><label class="check"><input name="rts" type="checkbox"> RTS</label>
-        <button id="apply-serial" type="button">Áp dụng</button>
-      </form>
-    </section>
     <details class="diagnostics"><summary>Chẩn đoán</summary><button type="button" id="doctor">Kiểm tra dịch vụ và driver</button><ul id="checks"></ul></details>
   </main>
 </body>

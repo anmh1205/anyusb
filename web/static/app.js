@@ -5,7 +5,7 @@ const mesh = "/v1/mesh";
 const enc = encodeURIComponent;
 const peerPath = id => mesh + "/peers/" + enc(id);
 const state = { me: null, peer: "", peers: [], devices: [], shares: [], discoveries: [], requests: [],
-  selected: null, firmware: null, monitor: null, job: null, scanning: false, polling: false };
+  scanning: false, polling: false };
 
 const fragment = location.hash.slice(1);
 if (/^[a-f0-9]{64}$/.test(fragment)) {
@@ -16,12 +16,11 @@ const token = sessionStorage.getItem("anyusb-token") || "";
 
 async function api(path, method = "GET", data) {
   const headers = { Authorization: "Bearer " + token };
-  const upload = data instanceof FormData;
-  if (data !== undefined && !upload) {
+  if (data !== undefined) {
     headers["Content-Type"] = "application/json";
     data = JSON.stringify(data);
   }
-  const response = await fetch(path, { method, headers, body: data, cache: "no-store", signal: AbortSignal.timeout(upload ? 180000 : 20000) });
+  const response = await fetch(path, { method, headers, body: data, cache: "no-store", signal: AbortSignal.timeout(20000) });
   const text = await response.text();
   let value;
   try { value = JSON.parse(text); } catch { value = { message: text.trim() }; }
@@ -68,11 +67,11 @@ function show(id, key, nodes) {
 function label(device) {
   return [device.manufacturer, device.product].filter(Boolean).join(" ") || "Thiết bị USB";
 }
-function card(name, detail, statusType, actions) {
+function card(name, detail, statusType, actions, notes = []) {
   const info = el("div", "", "info");
   const meta = el("p", "", "meta");
   meta.append(el("span", "", "state-dot " + statusType), document.createTextNode(detail));
-  info.append(el("h3", name), meta);
+  info.append(el("h3", name), meta, ...notes);
   const controls = el("div", "", "actions");
   controls.append(...actions);
   const item = el("article", "", "device-card");
@@ -145,7 +144,7 @@ function renderLocal(error) {
     });
   });
 }
-const linkLabels = { attached: "Đã kết nối", connecting: "Đang kết nối", reconnecting: "Đang nối lại", lost: "Đang chờ thiết bị trở lại" };
+const linkLabels = { attached: "Đã gắn vào máy này", connecting: "Đang kết nối", reconnecting: "Đang nối lại", lost: "Đang chờ thiết bị trở lại" };
 
 async function refreshRemote() {
   const selected = state.peer;
@@ -169,30 +168,24 @@ async function refreshRemote() {
       const online = current?.state === "attached";
       let summary = current ? linkLabels[current.state] || current.state : device.present ? "Sẵn sàng" : "Chưa cắm USB";
       if (busy) summary = "Đang được máy khác sử dụng";
-      if (ports.length) summary += " · " + ports.join(", ");
       const connect = button(current ? "Ngắt kết nối" : "Kết nối", async () => {
         if (current) await api(mesh + "/connections/" + enc(current.id), "DELETE");
         else await api(mesh + "/connections", "POST", { peer: selected, device: device.id });
         await refreshRemote();
       }, { primary: !current, disabled: !current && (!device.present || busy || device.lease_mode === "esp") });
-      const esp = button("ESP", () => {
-        state.selected = device;
-        $("target").textContent = label(device);
-        $("esp-panel").hidden = false;
-        $("esp-panel").scrollIntoView({ block: "nearest" });
-      }, { disabled: !device.present || busy || Boolean(current) });
-      return card(label(device), summary, online || device.present && !current ? "good" : current ? "wait" : "", [connect, esp]);
+      const notes = [];
+      if (online && ports.length) {
+        const localPorts = el("p", "", "local-ports");
+        localPorts.append(el("span", "Cổng trên máy này"), ...ports.map(port => el("code", port)));
+        notes.push(localPorts, el("p", "Chọn cổng này trong VS Code hoặc IDE của bạn.", "meta"));
+      }
+      if (current?.error) notes.push(el("p", current.error, "link-error"));
+      return card(label(device), summary, online || device.present && !current ? "good" : current ? "wait" : "", [connect], notes);
     });
   });
 }
-function closeESP() {
-  state.monitor?.close();
-  state.selected = null;
-  $("esp-panel").hidden = true;
-}
 async function selectPeer(id) {
   if (state.peer !== id) {
-    closeESP();
     $("remote").dataset.snapshot = "";
     $("remote").replaceChildren();
   }
@@ -222,7 +215,7 @@ async function poll() {
     renderNav();
     const paired = state.requests.find(r => !r.incoming && r.status === "approved" &&
       !previous.some(p => p.id === r.peer.id) && state.peers.some(p => p.id === r.peer.id));
-    if (paired && !state.selected) await selectPeer(paired.peer.id);
+    if (paired && !state.peer) await selectPeer(paired.peer.id);
     else await refreshRemote();
   } finally {
     state.polling = false;
@@ -243,103 +236,6 @@ async function discover() {
   }
 }
 
-function socket(path) {
-  const address = new URL(path, location.href);
-  address.protocol = "ws:";
-  address.searchParams.set("token", token);
-  return new WebSocket(address);
-}
-function appendLog(text) {
-  const log = $("logs");
-  log.textContent = (log.textContent + text).slice(-120000);
-  log.scrollTop = log.scrollHeight;
-}
-function settings() {
-  const form = $("esp-form").elements;
-  const query = new URLSearchParams({ baud: form.baud.value || "115200" });
-  if (form.port.value) query.set("port", form.port.value);
-  return query;
-}
-function selectedPath() {
-  if (!state.peer || !state.selected) throw new Error("Chọn thiết bị ESP trước.");
-  return peerPath(state.peer) + "/esp/" + enc(state.selected.id);
-}
-function setFirmware(bundle) {
-  state.firmware = bundle;
-  $("firmware-name").textContent = bundle.name + " · " + bundle.files.length + " file";
-}
-async function pickFolder(input) {
-  const files = Array.from(input.files);
-  const manifest = files.find(file => file.name === "flasher_args.json");
-  if (!manifest) throw new Error("Chọn thư mục chứa flasher_args.json.");
-  const index = manifest.webkitRelativePath.lastIndexOf("/");
-  const root = manifest.webkitRelativePath.substring(0, index + 1);
-  const spec = JSON.parse(await manifest.text());
-  const parts = Object.values(spec.flash_files || {});
-  if (!parts.length) throw new Error("Manifest chưa có file nạp.");
-  const matched = [...new Set(parts)].map(name => {
-    const file = files.find(f => f.webkitRelativePath === root + name.replaceAll("\\", "/").replace(/^\.\//, ""));
-    if (!file) throw new Error("Thiếu file " + name);
-    return { name, blob: file };
-  });
-  setFirmware({ name: manifest.name, manifest: spec, files: matched });
-}
-function firmwareUpload() {
-  if (!state.firmware) throw new Error("Chọn flasher_args.json trước.");
-  const upload = new FormData();
-  upload.append("manifest", JSON.stringify(state.firmware.manifest));
-  for (const file of state.firmware.files) upload.append("files", file.blob || new Blob([file.data]), file.name);
-  return upload;
-}
-function updateESPControls() {
-  for (const control of document.querySelectorAll("[data-op],#choose-firmware,#close-esp")) control.disabled = Boolean(state.job);
-  $("monitor").disabled = Boolean(state.job);
-}
-async function espOperation(op) {
-  if (state.job || state.monitor) throw new Error("Đóng tác vụ hoặc Serial Monitor trước.");
-  const path = selectedPath();
-  const peer = state.peer;
-  const query = settings();
-  query.set("op", op);
-  const upload = (op === "flash" || op === "verify") ? firmwareUpload() : undefined;
-  $("logs").textContent = "";
-  state.job = {};
-  updateESPControls();
-  status("esp-status", upload ? "Đang gửi firmware…" : "Đang mở cổng ESP…");
-  try {
-    const job = await api(path + "/jobs?" + query, "POST", upload);
-    const logs = socket(peerPath(peer) + "/jobs/" + enc(job.id) + "/logs");
-    state.job = logs;
-    logs.onmessage = event => {
-      const frame = JSON.parse(event.data);
-      for (const item of frame.logs || []) appendLog(item.text);
-      if (frame.job.status === "running") {
-        status("esp-status", "Đang chạy trên máy cắm USB…");
-      } else {
-        const ok = frame.job.status === "succeeded";
-        status("esp-status", ok ? "Hoàn tất" : "ESP báo lỗi " + (frame.job.error || ""), !ok);
-        state.job = null;
-        updateESPControls();
-      }
-    };
-    logs.onclose = () => {
-      if (state.job === logs) {
-        state.job = null;
-        updateESPControls();
-        status("esp-status", "Mất luồng nhật ký. Tác vụ trên máy cắm USB có thể vẫn đang chạy.", true);
-      }
-    };
-  } catch (err) {
-    state.job = null;
-    updateESPControls();
-    status("esp-status", err.message, true);
-  }
-}
-function monitorSend(message) {
-  if (state.monitor?.readyState !== WebSocket.OPEN) throw new Error("Mở Serial Monitor trước.");
-  state.monitor.send(JSON.stringify(message));
-}
-
 $("this-machine").onclick = action(() => selectPeer(""));
 $("discover").onclick = action(discover);
 $("refresh").onclick = action(async () => { await poll(); await discover(); });
@@ -357,55 +253,6 @@ $("doctor").onclick = action(async () => {
   const checks = await api("/v1/doctor");
   $("checks").replaceChildren(...checks.map(check => el("li", (check.ok ? "OK" : "Cần kiểm tra") + " · " + check.name + " · " + check.detail)));
 });
-$("close-esp").onclick = closeESP;
-$("choose-firmware").onclick = action(async () => {
-  if (window.anyusbDesktop) {
-    const bundle = await window.anyusbDesktop.chooseFirmware();
-    if (bundle) setFirmware(bundle);
-  } else {
-    $("firmware-folder").click();
-  }
-});
-$("firmware-folder").onchange = action(() => pickFolder($("firmware-folder")));
-for (const b of document.querySelectorAll("[data-op]")) b.onclick = () => espOperation(b.dataset.op).catch(err => status("esp-status", err.message, true));
-$("monitor").onclick = action(async () => {
-  if (state.monitor) { state.monitor.close(); return; }
-  $("logs").textContent = "";
-  const decoder = new TextDecoder();
-  const ws = socket(selectedPath() + "/monitor?" + settings());
-  state.monitor = ws;
-  ws.onopen = () => {
-    $("monitor").textContent = "Đóng Serial Monitor";
-    $("serial").hidden = false;
-    status("esp-status", "Serial Monitor đang mở");
-  };
-  ws.onmessage = event => {
-    const message = JSON.parse(event.data);
-    if (message.error) status("esp-status", message.error, true);
-    if (message.data) appendLog(decoder.decode(Uint8Array.from(atob(message.data), c => c.charCodeAt(0)), { stream: true }));
-  };
-  ws.onerror = () => status("esp-status", "Không mở được Serial Monitor.", true);
-  ws.onclose = () => {
-    if (state.monitor === ws) {
-      state.monitor = null;
-      $("monitor").textContent = "Mở Serial Monitor";
-      $("serial").hidden = true;
-      if ($("esp-status").textContent === "Serial Monitor đang mở") status("esp-status", "Đã đóng Serial Monitor.");
-    }
-  };
-});
-$("serial").onsubmit = action(async () => {
-  const input = $("serial").elements.text;
-  const data = new TextEncoder().encode(input.value + "\n");
-  if (data.length > 16384) throw new Error("Dữ liệu gửi vượt quá 16 KiB.");
-  monitorSend({ data: btoa(String.fromCharCode(...data)) });
-  input.value = "";
-});
-$("apply-serial").onclick = action(async () => {
-  const serial = $("serial").elements;
-  monitorSend({ baud: Number(settings().get("baud")), dtr: serial.dtr.checked, rts: serial.rts.checked });
-});
-
 action(async () => {
   if (!token) { status("notice", "Hãy mở AnyUSB từ menu ứng dụng để bắt đầu."); return; }
   state.me = await api(mesh + "/info");

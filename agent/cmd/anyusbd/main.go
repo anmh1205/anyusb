@@ -21,7 +21,7 @@ import (
 type options struct {
 	socket, data, usbip, usbipd, python string
 	peer, ui, advertise, backend, name  string
-	mdns, desktop                       bool
+	mdns, desktop, usbOnly              bool
 }
 
 func main() {
@@ -39,6 +39,7 @@ func main() {
 	flag.StringVar(&opt.name, "name", host, "name shown to other AnyUSB operators")
 	flag.BoolVar(&opt.mdns, "mdns", true, "advertise on the local network")
 	flag.BoolVar(&opt.desktop, "desktop", false, "allow local interactive Windows users to open the desktop app")
+	flag.BoolVar(&opt.usbOnly, "usb-only", false, "serve USB forwarding without host-side ESP operations")
 	flag.Parse()
 	if flag.NArg() != 0 || len(opt.name) > 128 {
 		flag.Usage()
@@ -73,9 +74,13 @@ func run(parent context.Context, opt options) error {
 	if err != nil {
 		return err
 	}
-	node.ConfigureESP(opt.python)
-	if diagnostic := node.ESPCheck(); !diagnostic.OK {
-		log.Print(diagnostic.Detail)
+	control := core.Options{Mesh: node.LocalHandler(), RawShare: node.RawShare}
+	if !opt.usbOnly {
+		node.ConfigureESP(opt.python)
+		control.ESPCheck = node.ESPCheck
+		if diagnostic := node.ESPCheck(); !diagnostic.OK {
+			log.Print(diagnostic.Detail)
+		}
 	}
 	newServer := func(listener net.Listener, handler http.Handler) listenerService {
 		return listenerService{listener, &http.Server{
@@ -99,7 +104,6 @@ func run(parent context.Context, opt options) error {
 		log.Printf("AnyUSB web UI at http://%s (run anyusb ui for the authorized URL)", listener.Addr())
 		servers = append(servers, newServer(listener, ui))
 	}
-	control := core.Options{Mesh: node.LocalHandler(), ESPCheck: node.ESPCheck, RawShare: node.RawShare}
 	if ui != nil {
 		control.UIURL = ui.URL()
 		if opt.desktop {

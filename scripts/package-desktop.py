@@ -19,7 +19,7 @@ UBUNTU = ROOT / "packaging" / "ubuntu"
 ICON = ROOT / "web" / "static" / "anyusb.png"
 DEPENDS = ", ".join((
     "init-system-helpers", "systemd", "kmod", "iproute2", "linux-tools-common", "linux-tools-generic",
-    "pkexec", "python3-venv", "libc6 (>= 2.34)", "libasound2t64", "libatk-bridge2.0-0t64", "libatk1.0-0t64",
+    "pkexec", "libc6 (>= 2.34)", "libasound2t64", "libatk-bridge2.0-0t64", "libatk1.0-0t64",
     "libcairo2", "libdbus-1-3", "libdrm2", "libgbm1", "libglib2.0-0t64", "libgtk-3-0t64", "libnspr4",
     "libnss3", "libpango-1.0-0", "libx11-6", "libxcb1", "libxcomposite1", "libxdamage1", "libxext6",
     "libxfixes3", "libxkbcommon0", "libxrandr2",
@@ -45,30 +45,6 @@ def archive_path(name):
     return path
 
 
-def install_wheel(target, wheel):
-    with zipfile.ZipFile(wheel) as archive:
-        for member in archive.infolist():
-            if member.is_dir():
-                continue
-            relative = archive_path(member.filename)
-            parts = relative.parts
-            if parts[0].endswith(".data"):
-                if len(parts) < 3 or parts[1] not in ("purelib", "platlib"):
-                    continue
-                relative = PurePosixPath(*parts[2:])
-            out = target.joinpath(*relative.parts)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(member) as source, out.open("wb") as dest:
-                shutil.copyfileobj(source, dest)
-
-
-def wheels(directory):
-    packages = sorted(directory.glob("*.whl"))
-    if not any(package.name.startswith("esptool-5.2.0-") for package in packages):
-        raise ValueError(f"missing esptool 5.2.0 wheel in {directory}")
-    return packages
-
-
 def package_windows(args, workspace):
     tree = workspace / "windows"
     tree.mkdir()
@@ -82,20 +58,6 @@ def package_windows(args, workspace):
     for name in ("anyusbd.exe", "anyusb.exe"):
         shutil.copy2(binaries / name, tree / name)
     shutil.copy2(ROOT / "scripts" / "install-windows.ps1", tree / "install-windows.ps1")
-    python = tree / "runtime"
-    with zipfile.ZipFile(args.python_embed) as runtime:
-        for member in runtime.namelist():
-            archive_path(member)
-        runtime.extractall(python)
-    pth, = python.glob("python*._pth")
-    entries = pth.read_text().splitlines()
-    entries = [line for line in entries if not line.strip().startswith("#") and line.strip()]
-    pth.write_text("\n".join(entries + ["Lib/site-packages"]) + "\n", encoding="utf-8")
-    for wheel in wheels(args.windows_wheels):
-        install_wheel(python / "Lib" / "site-packages", wheel)
-    probe = subprocess.check_output([python / "python.exe", "-m", "esptool", "version"], text=True)
-    if "5.2.0" not in probe.splitlines():
-        raise ValueError("Windows esptool runtime did not start")
     png = ICON.read_bytes()
     ico = struct.pack("<HHHBBBBHHII", 0, 1, 1, 64, 64, 0, 0, 1, 32, len(png), 22) + png
     (tree / "anyusb.ico").write_bytes(ico)
@@ -165,8 +127,6 @@ def package_ubuntu(args, workspace):
                 tar_source(tar, f"{runtime_root}/resources/app/{source.name}", source)
         for name in ("anyusbd", "anyusb"):
             tar_source(tar, f"usr/bin/{name}", ROOT / "dist" / "linux-amd64" / name, 0o755)
-        for wheel in wheels(args.linux_wheels):
-            tar_source(tar, f"usr/lib/anyusb/wheels/{wheel.name}", wheel)
         tar_source(tar, "usr/share/applications/anyusb.desktop", UBUNTU / "anyusb.desktop")
         tar_source(tar, "usr/share/pixmaps/anyusb.png", ICON)
         tar_source(tar, "usr/share/polkit-1/actions/io.anyusb.policy", UBUNTU / "anyusb.policy")
@@ -174,7 +134,7 @@ def package_ubuntu(args, workspace):
         tar_source(tar, "usr/share/doc/anyusb/copyright", ROOT / "LICENSE")
         tar_bytes(tar, "usr/lib/modules-load.d/anyusb.conf", b"usbip-host\nvhci-hcd\n")
         units = ROOT / "scripts" / "systemd"
-        agent = (units / "anyusbd.service").read_text().replace("/usr/local/bin/anyusbd ", "/usr/bin/anyusbd -python /opt/anyusb/esp/bin/python ")
+        agent = (units / "anyusbd.service").read_text().replace("/usr/local/bin/anyusbd ", "/usr/bin/anyusbd -usb-only ")
         tar_bytes(tar, "lib/systemd/system/anyusbd.service", agent.encode())
         tar_source(tar, "lib/systemd/system/anyusb-usbipd.service", units / "anyusb-usbipd.service")
     with tarfile.open(control, "w:gz") as tar:
@@ -186,7 +146,7 @@ Architecture: amd64
 Maintainer: AnyUSB <anyusb@localhost>
 Depends: {DEPENDS}
 Description: AnyUSB desktop for USB over LAN and Tailscale
- Connect to a shared USB device or run remote ESP operations from AnyUSB.
+ Use a remote USB device through the local operating system and applications.
 """
         tar_bytes(tar, "control", fields.encode())
         for name in ("postinst", "prerm", "postrm"):
@@ -202,10 +162,10 @@ Description: AnyUSB desktop for USB over LAN and Tailscale
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("checksums", "windows-electron", "linux-electron", "windows-wheels", "linux-wheels", "python-embed", "makensis"):
+    for name in ("checksums", "windows-electron", "linux-electron", "makensis"):
         parser.add_argument("--" + name, type=lambda v: Path(v).resolve(), required=True)
     parser.add_argument("--output", type=lambda v: Path(v).resolve(), default=ROOT / "dist" / "desktop")
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version", default="0.1.1")
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version):
         parser.error("version must be major.minor.patch")
@@ -214,7 +174,6 @@ def main():
     verify_electron(args.linux_electron, args.checksums)
     with tempfile.TemporaryDirectory(prefix="anyusb-build-") as temporary:
         workspace = Path(temporary)
-        # Validate the Windows embedded Python before spending time on both packages.
         windows = package_windows(args, workspace)
         ubuntu = package_ubuntu(args, workspace)
     for package in (windows, ubuntu):

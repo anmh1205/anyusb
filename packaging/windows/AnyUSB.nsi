@@ -50,7 +50,7 @@ Section "AnyUSB"
   SetOutPath "$INSTDIR"
   File /r "${PAYLOAD}\*.*"
   DetailPrint "Đang cài dịch vụ AnyUSB và driver USB/IP…"
-  nsExec::ExecToLog '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\install-windows.ps1" -BuildDirectory "$INSTDIR" -DesktopInstaller -Python "$INSTDIR\runtime\python.exe"'
+  nsExec::ExecToLog '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\install-windows.ps1" -BuildDirectory "$INSTDIR" -DesktopInstaller'
   Pop $0
   ${If} $0 == "3010"
     SetRebootFlag true
