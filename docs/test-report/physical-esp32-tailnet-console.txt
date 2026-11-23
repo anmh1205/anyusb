@@ -1,0 +1,20 @@
+client boot:
+6.12.117+deb13-amd64
+usbip (usbip-utils 2.0)
+AnyUSB lab control ready
+PASS mTLS pairing directly over Tailscale
+PASS authenticated peer API over the physical network
+Board at bus 1-2.2.2.2 incarnation 1-2.2.2.2/19
+FAIL Remote ESP chip-id via AnyUSB: client command exited 1: esptool v5.2.0
+Serial port /dev/ttyACM0:
+Connecting...
+Detecting chip type... ESP32-S3
+Connected to ESP32-S3 on /dev/ttyACM0:
+
+A fatal error occurred: Serial data stream stopped: Possible serial noise or corruption.
+anyusb: ESP job 9f97fc3ac88b417d001845b87eae94b4 failed: exit status 2
+PASS managed USB/IP physical attach: /dev/ttyACM0
+FAIL managed USB/IP serial operation: client command exited 143: esptool v5.2.0
+Serial port /dev/ttyACM0:
+Connecting..................Terminated
+PASS stock USB/IP over tailnet SSH relay
