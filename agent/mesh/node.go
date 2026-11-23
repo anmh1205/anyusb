@@ -58,6 +58,7 @@ type Node struct {
 	config      config
 	invite      invite
 	pending     map[string]pairSession
+	approvals   map[string]approval
 	leases      map[string]*lease
 	connections map[string]*connection
 	subscribers map[chan Event]struct{}
@@ -87,7 +88,7 @@ func New(ctx context.Context, adapter platform.Adapter, dir, name, advertised, b
 	n := &Node{
 		ctx: ctx, adapter: adapter, dir: dir, name: name, address: advertised, backend: backend,
 		cert: cert, id: fingerprint(cert.Certificate[0]), epoch: randomID(),
-		pending: make(map[string]pairSession), leases: make(map[string]*lease),
+		pending: make(map[string]pairSession), approvals: make(map[string]approval), leases: make(map[string]*lease),
 		connections: make(map[string]*connection), subscribers: make(map[chan Event]struct{}),
 		inventory: make(map[string]platform.Device),
 	}

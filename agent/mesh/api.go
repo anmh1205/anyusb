@@ -45,7 +45,22 @@ func (n *Node) LocalHandler() http.Handler {
 		}
 		return n.pair(r.Context(), input.Endpoint, input.Code)
 	}))
-	mux.HandleFunc("GET /v1/mesh/discovery", output(func(r *http.Request) ([]Discovered, error) { return Discover(r.Context()) }))
+	mux.HandleFunc("GET /v1/mesh/discovery", output(func(r *http.Request) ([]Discovered, error) { return n.discover(r.Context()), nil }))
+	mux.HandleFunc("GET /v1/mesh/pair-requests", output(func(r *http.Request) ([]approval, error) { return n.approvalsForUI(r.Context()), nil }))
+	mux.HandleFunc("POST /v1/mesh/pair-requests", output(func(r *http.Request) (approval, error) {
+		var input struct{ Endpoint, ID string }
+		if err := inputJSON(r, &input); err != nil {
+			return approval{}, err
+		}
+		return n.requestApproval(r.Context(), input.Endpoint, input.ID)
+	}))
+	mux.HandleFunc("POST /v1/mesh/pair-requests/{id}", empty(func(r *http.Request) error {
+		var input struct{ Approve bool }
+		if err := inputJSON(r, &input); err != nil {
+			return err
+		}
+		return n.decideApproval(r.PathValue("id"), input.Approve)
+	}))
 	mux.HandleFunc("GET /v1/mesh/peers", output(func(*http.Request) ([]Peer, error) { return n.peers(), nil }))
 	mux.HandleFunc("PUT /v1/mesh/peers/{peer}", output(func(r *http.Request) (Peer, error) {
 		var input struct{ Endpoint string }
@@ -95,6 +110,26 @@ func (n *Node) LocalHandler() http.Handler {
 func (n *Node) PeerHandler() http.Handler {
 	pair := http.NewServeMux()
 	pair.HandleFunc("GET /v1/pair/info", empty(func(*http.Request) error { return nil }))
+	pair.HandleFunc("GET /v1/pair/identity", output(func(*http.Request) (Peer, error) {
+		return Peer{ID: n.id, Name: n.name}, nil
+	}))
+	pair.HandleFunc("POST /v1/pair/approvals", output(func(r *http.Request) (approvalReply, error) {
+		var input approvalStart
+		if err := inputJSON(r, &input); err != nil {
+			return approvalReply{}, err
+		}
+		return n.beginApproval(peerID(r), r.RemoteAddr, input)
+	}))
+	pair.HandleFunc("POST /v1/pair/approvals/{id}", empty(func(r *http.Request) error {
+		var input struct{ Nonce []byte }
+		if err := inputJSON(r, &input); err != nil {
+			return err
+		}
+		return n.revealApproval(peerID(r), r.PathValue("id"), input.Nonce)
+	}))
+	pair.HandleFunc("GET /v1/pair/approvals/{id}", output(func(r *http.Request) (string, error) {
+		return n.remoteApproval(peerID(r), r.PathValue("id"))
+	}))
 	pair.HandleFunc("POST /v1/pair/start", output(func(r *http.Request) (pairReply, error) {
 		var input pairStart
 		if err := inputJSON(r, &input); err != nil {
@@ -173,10 +208,9 @@ func (n *Node) PeerHandler() http.Handler {
 			problem(w, failure(http.StatusForbidden, "peer endpoint requires an agent TLS connection"))
 			return
 		}
-		switch r.URL.Path {
-		case "/v1/pair/info", "/v1/pair/start", "/v1/pair/finish":
+		if _, pattern := pair.Handler(r); pattern != "" {
 			pair.ServeHTTP(w, r)
-		default:
+		} else {
 			id := peerID(r)
 			if !n.trusted(id) {
 				problem(w, failure(http.StatusUnauthorized, "unpaired peer"))
@@ -224,6 +258,11 @@ func (n *Node) revoke(id string) error {
 	if err := n.saveLocked(); err != nil {
 		n.config.Peers[id] = peer
 		return err
+	}
+	for key, req := range n.approvals {
+		if req.Peer.ID == id {
+			delete(n.approvals, key)
+		}
 	}
 	for _, le := range n.leases {
 		if le.Owner == id && !le.busy {

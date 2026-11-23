@@ -17,6 +17,17 @@ explicit local initiation, expiry, and attempt limits. Consume the session on
 success or exhaustion. Subsequent HTTPS and WSS sessions use mutual TLS and
 accept only pinned peer identities. Revocation removes trust and blocks new
 operations. mDNS and manually entered addresses supply endpoint hints only.
+
+Desktop pairing adds an approval request alongside the CPace invitation flow.
+The requester commits to a random value with the two TLS fingerprints. The
+receiver generates its random value before the requester reveals its value.
+The apps display the same eight-digit comparison code derived from both
+values and the pinned identities. The receiver approves only after comparing
+the displays. The requester retrieves the result over the same TLS identity.
+Requests expire after two minutes and never persist as trusted peers before
+approval. The Tailscale client supplies candidate addresses when it is
+already signed in. AnyUSB confirms the peer API and TLS fingerprint before
+showing a discovery result.
 [CPace Go package](https://filippo.io/cpace)
 
 Send device and lease snapshots with a host epoch and revision. Number events
