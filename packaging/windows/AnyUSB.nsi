@@ -23,7 +23,7 @@ BrandingText "AnyUSB"
 !insertmacro MUI_LANGUAGE "Vietnamese"
 
 Function .onInit
-  ${IfNot} ${RunningX64}
+  ${IfNot} ${IsNativeAMD64}
     MessageBox MB_ICONSTOP "Bộ cài này cần Windows x64."
     Abort
   ${EndIf}
@@ -50,7 +50,7 @@ Section "AnyUSB"
   SetOutPath "$INSTDIR"
   File /r "${PAYLOAD}\*.*"
   DetailPrint "Đang cài dịch vụ AnyUSB và driver USB/IP…"
-  nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\install-windows.ps1" -BuildDirectory "$INSTDIR" -DesktopInstaller -Python "$INSTDIR\runtime\python.exe"'
+  nsExec::ExecToLog '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\install-windows.ps1" -BuildDirectory "$INSTDIR" -DesktopInstaller -Python "$INSTDIR\runtime\python.exe"'
   Pop $0
   ${If} $0 == "3010"
     SetRebootFlag true
@@ -76,7 +76,7 @@ Section "Uninstall"
   Pop $0
   nsExec::Exec '"$SYSDIR\sc.exe" delete anyusbd'
   Pop $0
-  nsExec::Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command Remove-NetFirewallRule -Name AnyUSB-Peer,AnyUSB-LAN-Discovery -ErrorAction SilentlyContinue'
+  nsExec::Exec '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -Command Remove-NetFirewallRule -Name AnyUSB-Peer,AnyUSB-LAN-Discovery -ErrorAction SilentlyContinue'
   Pop $0
   Delete "$SMPROGRAMS\AnyUSB.lnk"
   DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\AnyUSB"
