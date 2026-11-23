@@ -1,6 +1,6 @@
 # AnyUSB desktop USB forwarding
 
-**2026-11-23 · AnyUSB 0.1.2 · source `153c18f`**
+**2026-11-23 · AnyUSB 0.1.2 · package source `5d3a0d7`**
 
 ## Native operating-system port and adverse networks
 
@@ -63,12 +63,15 @@ the 0.1.2 Electron app and Go service/CLI, with no Python or esptool payload.
 The Ubuntu unit starts `/usr/bin/anyusbd -usb-only`; its payload also has no
 Python or esptool runtime. The Windows AnyUSB setup executable remains unsigned;
 the setup script separately verifies the hashes and Authenticode signatures of
-the upstream driver installers it downloads.
+the upstream driver installers it downloads. The compiled Windows installer
+contains the in-place upgrade path: it stops the old service before replacing
+binaries, preserves ProgramData state and an existing peer firewall scope, then
+updates and restarts the service.
 
 | Package | SHA-256 |
 | --- | --- |
-| `AnyUSB-0.1.2-Windows-x64.exe` | `442aab369b5a1a9ae3f10a276741bb3f147529faafc1bb925f4f40f5c88c6863` |
-| `anyusb_0.1.2_amd64.deb` | `51ebe035b97652ee5336a8313cd179128e5e6c4d8837d26169585851bde9c372` |
+| `AnyUSB-0.1.2-Windows-x64.exe` | `6fe6a4fce3384158d7ff5cac3c06f712e612efabb535e1d20fe3266e05bec03d` |
+| `anyusb_0.1.2_amd64.deb` | `c36115b8c7f403ee1a25116db3764cae8f8d9a12a1cf6e5c1b323cb9eb5a9727` |
 
 ## Remaining physical acceptance
 
@@ -81,4 +84,5 @@ ESP32-S3, selecting that COM port and flashing from VS Code/Arduino IDE, and
 privileged installation on clean Windows and Ubuntu systems. At the end of this
 run, the named Ubuntu hardware peer was offline on Tailscale and timed out on
 SSH. The local Windows host exposed only legacy `COM1` and had no AnyUSB or
-USB/IP driver services installed, so no physical Windows claim is made.
+USB/IP driver services installed, so neither a physical Windows claim nor a
+live installed-service upgrade claim is made.
