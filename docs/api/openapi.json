@@ -269,6 +269,11 @@
                 "properties": {
                   "device": {
                     "type": "string"
+                  },
+                  "confirm_risk": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Explicit acceptance required for managed storage, input, network, audio and video profiles."
                   }
                 }
               }
@@ -661,6 +666,55 @@
           "incarnation": {
             "type": "string"
           },
+          "usb_version": {
+            "type": "string"
+          },
+          "speed": {
+            "type": "string"
+          },
+          "device_class": {
+            "type": "string"
+          },
+          "device_subclass": {
+            "type": "string"
+          },
+          "device_protocol": {
+            "type": "string"
+          },
+          "functions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/USBFunction"
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "risk": {
+            "enum": [
+              "storage",
+              "input",
+              "network",
+              "timing",
+              "topology"
+            ]
+          },
+          "share_policy": {
+            "enum": [
+              "allow",
+              "confirm",
+              "block"
+            ]
+          },
+          "reconnect_policy": {
+            "enum": [
+              "automatic",
+              "confirmed"
+            ]
+          },
           "exported": {
             "type": "boolean"
           },
@@ -675,6 +729,44 @@
               "usbip",
               "esp"
             ]
+          }
+        }
+      },
+      "USBFunction": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "configuration": {
+            "type": "integer"
+          },
+          "interface": {
+            "type": "integer"
+          },
+          "alternate": {
+            "type": "integer"
+          },
+          "class": {
+            "type": "string"
+          },
+          "subclass": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "driver": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
           }
         }
       },
@@ -704,6 +796,9 @@
           },
           "bus_id": {
             "type": "string"
+          },
+          "device_info": {
+            "$ref": "#/components/schemas/Device"
           },
           "expires": {
             "type": "string",

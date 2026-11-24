@@ -4,6 +4,12 @@
 open hardware checks. The builds carry the Linux and Windows backends, peer
 control plane, Remote ESP operations, local web UI and CLI.
 
+The data plane forwards a whole USB device; COM/tty discovery is only one kind
+of client-side binding. The [general USB support plan](general-usb-support.md)
+defines the proposed function/binding model, ST-Link and J-Link validation, and
+class-aware compatibility work without changing that whole-device lease
+boundary.
+
 ## Components and interfaces
 
 Each Windows or Linux machine can act as a USB host, a USB client, or both.
@@ -51,6 +57,15 @@ use the virtual port reported by the import backend to find the corresponding Pn
 device and its interface handles. The usbip-win2 hub port is matched to the PnP
 device address below its emulated root hub, so identical VID/PID devices still
 resolve to their own COM ports. [Linux tooling](https://github.com/torvalds/linux/blob/master/tools/usb/usbip/README), [Windows host automation](https://github.com/dorssel/usbipd-win/wiki/Automation), [Windows client CLI](https://github.com/vadimgrn/usbip-win2/blob/v.0.9.8.1/userspace/usbip/usbip.cpp)
+
+Device inventory also models USB interface functions. Imported-device state
+maps those functions to client-local bindings such as serial, HID, block,
+network, debug-driver and generic USB objects, then reports readiness separately
+from the existence of the native USB/IP port. `serial_ports` remains a v1
+compatibility view rather than the transport contract. See the
+[function and binding ADR](adr/0006-usb-functions-bindings-readiness.md).
+Concrete additive fields and local managed endpoints are illustrated in the
+[local USB model](api/local-usb-model.md).
 
 ## Control plane and leases
 

@@ -15,8 +15,10 @@ are generated in `dist/desktop/`.
    click **Mã trùng, đồng ý**. Pairing is saved on both computers.
 3. On the machine with the USB cable, click **Cho phép dùng** on the device.
    On the machine running your IDE, pick the paired machine and click
-   **Kết nối**. AnyUSB attaches the USB device to that computer. For a USB
-   serial device, **Cổng trên máy này** shows its local COM or `/dev/tty*`
+   **Kết nối**. AnyUSB attaches the complete USB device to that computer. For a
+   USB serial function, **Cổng trên máy này** shows its local COM or
+   `/dev/tty*`. Debug probes, HID, storage and other devices instead show their
+   OS driver/binding state and remain usable without a COM port.
    port once the driver has enumerated it.
 4. Select that port in your usual tool. In VS Code with ESP-IDF, run
    **ESP-IDF: Select Port to Use**, then flash or open the monitor in VS Code.
@@ -102,6 +104,22 @@ anyusb connect --peer PEER DEVICE
 anyusb list --connections
 anyusb disconnect --connection CONNECTION
 ```
+
+For a connected ST-Link, J-Link or CMSIS-DAP device, explicitly run the
+read-only native-tool enumeration probe when you want application-level
+evidence. Vendor tools are optional and probes never run in the background:
+
+```text
+anyusb probe --connection CONNECTION stlink
+anyusb probe --connection CONNECTION jlink
+anyusb probe --connection CONNECTION cmsis-dap
+```
+
+Storage, input, network and real-time audio/video profiles require explicit
+risk acceptance (`--confirm-risk`) for a managed connection. USB hubs are not
+valid whole-device share targets. See the [general USB support and evidence
+plan](docs/general-usb-support.md) for the exact support vocabulary; an
+attached device is not automatically a hardware compatibility claim.
 
 Keep TCP 47443 reachable only by the intended networks. Stock USB/IP on TCP
 3240 runs separately. Managed exports require that TCP 3240 be accessible to

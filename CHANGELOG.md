@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added general USB functions, client-local bindings and readiness reporting
+  for Linux and Windows, including composite and non-serial devices. Added
+  explicit ST-Link, J-Link and CMSIS-DAP native-tool probes, class-aware risk
+  confirmation, hub rejection, USB-neutral CLI/UI guidance, schemas and the
+  hardware-evidence plan. Physical probe compatibility remains `UNVERIFIED`
+  until the recorded hardware matrix is run.
 - Added a desktop UI and Windows and Ubuntu package builders. The desktop app
   discovers peers, approves pairing, and attaches shared USB devices using
   native USB/IP.
