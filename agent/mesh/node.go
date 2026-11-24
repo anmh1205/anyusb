@@ -38,9 +38,10 @@ type Peer struct {
 type descriptor struct{ VendorID, ProductID, Serial string }
 
 type connectionIntent struct {
-	ID     string `json:"id"`
-	Peer   string `json:"peer"`
-	Device string `json:"device"`
+	ID           string `json:"id"`
+	Peer         string `json:"peer"`
+	Device       string `json:"device"`
+	RiskAccepted bool   `json:"risk_accepted,omitempty"`
 }
 
 type config struct {

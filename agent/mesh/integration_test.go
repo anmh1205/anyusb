@@ -153,6 +153,55 @@ func requireEventually(t *testing.T, description string, predicate func() bool) 
 	t.Fatal("timed out:", description)
 }
 
+func TestManagedRiskPolicyRequiresAndPersistsAcceptance(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	storage := platform.EnrichDevice(platform.Device{
+		ID: "disk", BusID: "1-2", VendorID: "1209", ProductID: "0001", Serial: "disposable",
+		Incarnation: "disk-1", Functions: []platform.USBFunction{{ID: "1:0.0", Class: "08"}},
+	})
+	host, _ := nodeForTest(t, ctx, &testAdapter{device: storage}, "127.0.0.1:3240")
+	host.mu.Lock()
+	host.config.Peers["client"] = Peer{ID: "client", Name: "client"}
+	host.mu.Unlock()
+	if err := host.setShared(ctx, storage.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.acquireWithPolicy(ctx, "client", storage.ID, "usbip", false); !errors.Is(err, platform.ErrInvalid) {
+		t.Fatalf("unconfirmed storage lease = %v", err)
+	}
+	le, err := host.acquireWithPolicy(ctx, "client", storage.ID, "usbip", true)
+	if err != nil || le.DeviceInfo.Risk != "storage" || le.DeviceInfo.ReconnectPolicy != platform.ReconnectConfirmed {
+		t.Fatalf("confirmed storage lease = %+v, %v", le, err)
+	}
+	if _, err := host.renew("client", le.ID); err != nil {
+		t.Fatalf("confirmed lease did not renew: %v", err)
+	}
+}
+
+func TestManagedSharingRejectsUSBHub(t *testing.T) {
+	hub := platform.EnrichDevice(platform.Device{ID: "hub", BusID: "1-1", Product: "Generic USB Hub", Incarnation: "hub-1"})
+	node, _ := nodeForTest(t, t.Context(), &testAdapter{device: hub}, "127.0.0.1:3240")
+	if err := node.setShared(t.Context(), hub.ID, true); !errors.Is(err, platform.ErrInvalid) {
+		t.Fatalf("hub share = %v", err)
+	}
+}
+
+func TestProfileProbeIsExplicitAndMatchesDeviceProfile(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	device := platform.Device{Serial: "DAP123", Profiles: []string{"debug-probe", "cmsis-dap"}}
+	node := &Node{connections: map[string]*connection{
+		"connection": {Connection: Connection{ID: "connection", State: "attached", DeviceInfo: &device, Import: &platform.Import{Port: 1}}},
+	}}
+	result, err := node.probeConnection(t.Context(), "connection", "CMSIS-DAP")
+	if err != nil || result.OK || result.Error == "" {
+		t.Fatalf("missing optional profile tool = %+v, %v", result, err)
+	}
+	if _, err := node.probeConnection(t.Context(), "connection", "jlink"); !errors.Is(err, platform.ErrInvalid) {
+		t.Fatalf("mismatched profile probe = %v", err)
+	}
+}
+
 func TestManagedPairLeaseAndReconnect(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -319,7 +368,7 @@ func TestConnectionIntentSurvivesAgentRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	first.mu.Unlock()
-	created, err := first.connect(t.Context(), peer, "board")
+	created, err := first.connectWithPolicy(t.Context(), peer, "board", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +392,7 @@ func TestConnectionIntentSurvivesAgentRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	restored := second.connectionViews()
-	if len(restored) != 1 || restored[0].ID != created.ID || restored[0].Peer != peer.ID || restored[0].Device != "board" {
+	if len(restored) != 1 || restored[0].ID != created.ID || restored[0].Peer != peer.ID || restored[0].Device != "board" || !restored[0].RiskAccepted {
 		t.Fatalf("restored connections = %+v", restored)
 	}
 	if err := second.disconnect(t.Context(), created.ID); err != nil {

@@ -27,11 +27,12 @@ const usage = `Usage: anyusb [-socket PATH] [-json] COMMAND
   list [--remote HOST | --imports | --peer PEER | --connections | --shared]
   share [--managed] DEVICE_ID_OR_BUSID
   unshare [--managed] DEVICE_ID_OR_BUSID
-  connect HOST BUSID | connect --peer PEER DEVICE
+  connect HOST BUSID | connect --peer PEER DEVICE [--confirm-risk]
   disconnect VHCI_PORT | disconnect --connection ID
   watch [--peer PEER]
   discover | peers | pair invite | pair HOST CODE
   revoke PEER | peer-address PEER HOST
+  probe --connection ID stlink|jlink|cmsis-dap
   chip-id|reset|erase PEER DEVICE [--port PORT] [--baud BAUD]
   flash|verify PEER DEVICE [--port PORT] [--baud BAUD] (--idf FILE | OFFSET=FILE...)
   monitor PEER DEVICE [--port PORT] [--baud BAUD] [--dtr] [--rts]
@@ -129,6 +130,8 @@ func runCLI(ctx context.Context, args []string, output io.Writer) error {
 			status := "CHECK"
 			if check.OK {
 				status = "OK"
+			} else if check.Optional {
+				status = "OPTIONAL"
 			}
 			return []string{check.Name, status, check.Detail}
 		})
@@ -167,19 +170,32 @@ func list(ctx context.Context, c client, args []string, output io.Writer, jsonOu
 			})
 	case *imports:
 		return listRows(ctx, c, "/v1/imports", output, jsonOutput,
-			[]string{"PORT", "HOST", "REMOTE BUSID", "SERIAL PORTS", "DEVICE"}, func(i platform.Import) []string {
-				return []string{strconv.Itoa(i.Port), i.RemoteHost, i.RemoteBusID, strings.Join(i.SerialPorts, ", "), i.Name}
+			[]string{"PORT", "HOST", "REMOTE BUSID", "READINESS", "LOCAL BINDINGS", "DEVICE"}, func(i platform.Import) []string {
+				return []string{strconv.Itoa(i.Port), i.RemoteHost, i.RemoteBusID, i.Readiness, bindingList(i.Bindings), i.Name}
 			})
 	default:
 		return listRows(ctx, c, "/v1/devices", output, jsonOutput,
-			[]string{"BUSID", "ID", "VID:PID", "STATE", "DEVICE"}, func(d platform.Device) []string {
+			[]string{"BUSID", "ID", "VID:PID", "PROFILE", "POLICY", "STATE", "DEVICE"}, func(d platform.Device) []string {
 				state := "Local"
 				if d.Exported {
 					state = "Shared"
 				}
-				return []string{d.BusID, d.ID, usbID(d.VendorID, d.ProductID), state, strings.TrimSpace(d.Manufacturer + " " + d.Product)}
+				return []string{d.BusID, d.ID, usbID(d.VendorID, d.ProductID), strings.Join(d.Profiles, ","), d.SharePolicy,
+					state, strings.TrimSpace(d.Manufacturer + " " + d.Product)}
 			})
 	}
+}
+
+func bindingList(bindings []platform.LocalBinding) string {
+	values := make([]string, 0, len(bindings))
+	for _, binding := range bindings {
+		value := binding.Kind + ":" + binding.ID
+		if binding.Status != "" && binding.Status != "ready" {
+			value += "[" + binding.Status + "]"
+		}
+		values = append(values, value)
+	}
+	return strings.Join(values, ", ")
 }
 
 func usbID(vendor, product string) string {

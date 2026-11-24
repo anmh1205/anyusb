@@ -14,14 +14,15 @@ import (
 const leaseTTL = 30 * time.Second
 
 type Lease struct {
-	ID      string    `json:"id"`
-	Device  string    `json:"device"`
-	Owner   string    `json:"owner"`
-	Mode    string    `json:"mode"`
-	BusID   string    `json:"bus_id,omitempty"`
-	Expires time.Time `json:"expires"`
-	Online  bool      `json:"online"`
-	Closing bool      `json:"closing"`
+	ID         string           `json:"id"`
+	Device     string           `json:"device"`
+	Owner      string           `json:"owner"`
+	Mode       string           `json:"mode"`
+	BusID      string           `json:"bus_id,omitempty"`
+	DeviceInfo *platform.Device `json:"device_info,omitempty"`
+	Expires    time.Time        `json:"expires"`
+	Online     bool             `json:"online"`
+	Closing    bool             `json:"closing"`
 }
 
 type lease struct {
@@ -156,6 +157,9 @@ func (n *Node) setShared(ctx context.Context, target string, enabled bool) error
 		if d.ID == "" {
 			return platform.ErrNotFound
 		}
+		if d.SharePolicy == platform.ShareBlock {
+			return fmt.Errorf("%w: this USB device is outside the whole-device share boundary", platform.ErrInvalid)
+		}
 	}
 	if n.leases[id] != nil {
 		return fmt.Errorf("%w: device has an active lease", platform.ErrConflict)
@@ -182,6 +186,10 @@ func (n *Node) setShared(ctx context.Context, target string, enabled bool) error
 }
 
 func (n *Node) acquire(ctx context.Context, owner, id, mode string) (Lease, error) {
+	return n.acquireWithPolicy(ctx, owner, id, mode, mode == "esp")
+}
+
+func (n *Node) acquireWithPolicy(ctx context.Context, owner, id, mode string, riskAccepted bool) (Lease, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if _, ok := n.config.Peers[owner]; !ok {
@@ -207,6 +215,9 @@ func (n *Node) acquire(ctx context.Context, owner, id, mode string) (Lease, erro
 	if d.ID == "" || !slices.Contains(n.config.Shares[id], describe(d)) {
 		return Lease{}, fmt.Errorf("%w: device is absent or its current USB identity was not shared", platform.ErrNotFound)
 	}
+	if mode == "usbip" && platform.RequiresRiskConfirmation(d) && !riskAccepted {
+		return Lease{}, fmt.Errorf("%w: %s USB device requires explicit risk acceptance", platform.ErrInvalid, d.Risk)
+	}
 	if mode == "usbip" && !d.Exported {
 		d, err = n.adapter.Export(ctx, d.BusID)
 	} else if mode == "esp" && d.Exported {
@@ -218,7 +229,8 @@ func (n *Node) acquire(ctx context.Context, owner, id, mode string) (Lease, erro
 	if d.ID != id || !slices.Contains(n.config.Shares[id], describe(d)) {
 		return Lease{}, fmt.Errorf("%w: device changed while preparing the lease", platform.ErrConflict)
 	}
-	le := &lease{Lease: Lease{ID: randomID(), Device: id, Owner: owner, Mode: mode, BusID: d.BusID, Online: true, Expires: time.Now().Add(leaseTTL)}, device: d, busy: mode == "esp"}
+	le := &lease{Lease: Lease{ID: randomID(), Device: id, Owner: owner, Mode: mode, BusID: d.BusID,
+		DeviceInfo: &d, Online: true, Expires: time.Now().Add(leaseTTL)}, device: d, busy: mode == "esp"}
 	n.leases[id] = le
 	n.publishLocked("leased", id)
 	return le.Lease, nil
@@ -377,6 +389,7 @@ func (n *Node) reconcile() {
 				d = exported
 			}
 			le.device, le.BusID, le.Online = d, d.BusID, true
+			le.DeviceInfo = &d
 			n.publishLocked("exported", id)
 		}
 	}

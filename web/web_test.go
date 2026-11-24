@@ -54,7 +54,10 @@ func TestDesktopUIOnlyOffersNativeUSBForwarding(t *testing.T) {
 			t.Fatalf("desktop UI contains obsolete firmware workflow %q", forbidden)
 		}
 	}
-	for _, required := range []string{"cổng trên máy này", "usb đã được gắn vào hệ điều hành", "tự nối lại"} {
+	for _, required := range []string{
+		"cổng trên máy này", "usb đã được gắn vào hệ điều hành", "thiết bị này không cần com/tty", "liên kết hệ điều hành",
+		"driver_missing", "confirm_risk", "showemulist usb", "stm32cubeprogrammer", "pyocd", "tự nối lại",
+	} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("desktop UI is missing native forwarding guidance %q", required)
 		}

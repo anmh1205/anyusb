@@ -106,11 +106,11 @@ func managedCLI(ctx context.Context, c client, command string, args []string, ou
 		if len(args) == 0 || args[0] != "--peer" {
 			return false, nil
 		}
-		if len(args) != 3 {
-			return true, fmt.Errorf("usage: anyusb connect --peer PEER DEVICE")
+		if len(args) != 3 && !(len(args) == 4 && args[3] == "--confirm-risk") {
+			return true, fmt.Errorf("usage: anyusb connect --peer PEER DEVICE [--confirm-risk]")
 		}
 		method, path = http.MethodPost, meshPath+"/connections"
-		body = map[string]string{"peer": args[1], "device": args[2]}
+		body = map[string]any{"peer": args[1], "device": args[2], "confirm_risk": len(args) == 4}
 	case "disconnect":
 		if len(args) == 0 || (args[0] != "--connection" && args[0] != "--lease") {
 			return false, nil
@@ -119,6 +119,12 @@ func managedCLI(ctx context.Context, c client, command string, args []string, ou
 			return true, fmt.Errorf("usage: anyusb disconnect --connection ID")
 		}
 		method, path, message = http.MethodDelete, meshPath+"/connections/"+url.PathEscape(args[1]), "Connection disconnected"
+	case "probe":
+		if len(args) != 3 || args[0] != "--connection" {
+			return true, fmt.Errorf("usage: anyusb probe --connection ID stlink|jlink|cmsis-dap")
+		}
+		method, path = http.MethodPost, meshPath+"/connections/"+url.PathEscape(args[1])+"/probe"
+		body = map[string]string{"profile": args[2]}
 	case "watch":
 		if len(args) != 2 || args[0] != "--peer" {
 			return false, nil
@@ -160,7 +166,7 @@ func showShared(out io.Writer, devices []mesh.SharedDevice, jsonOutput bool, err
 	if jsonOutput {
 		return json.NewEncoder(out).Encode(devices)
 	}
-	return printTable(out, []string{"DEVICE ID", "BUSID", "STATE", "LEASE HOLDER", "DEVICE"}, devices, func(d mesh.SharedDevice) []string {
+	return printTable(out, []string{"DEVICE ID", "BUSID", "PROFILE", "RISK", "STATE", "LEASE HOLDER", "DEVICE"}, devices, func(d mesh.SharedDevice) []string {
 		state := "Absent"
 		if d.Present {
 			state = "Available"
@@ -168,7 +174,7 @@ func showShared(out io.Writer, devices []mesh.SharedDevice, jsonOutput bool, err
 		if d.Mode != "" {
 			state = d.Mode
 		}
-		return []string{d.ID, d.BusID, state, d.Owner, strings.TrimSpace(d.Manufacturer + " " + d.Product)}
+		return []string{d.ID, d.BusID, strings.Join(d.Profiles, ","), d.Risk, state, d.Owner, strings.TrimSpace(d.Manufacturer + " " + d.Product)}
 	})
 }
 

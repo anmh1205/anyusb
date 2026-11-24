@@ -92,6 +92,9 @@ func Handler(adapter platform.Adapter, options Options) http.Handler {
 	})))
 	router.HandleFunc("GET /v1/doctor", respond(func(r *http.Request) ([]platform.Check, error) {
 		checks := adapter.Doctor(r.Context())
+		imports, err := adapter.ListImports(r.Context())
+		checks = append(checks, platform.ImportBindingCheck(imports, err))
+		checks = append(checks, platform.ProfileToolChecks()...)
 		if options.ESPCheck != nil {
 			checks = append(checks, options.ESPCheck())
 		}

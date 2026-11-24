@@ -121,12 +121,14 @@ func relay(ctx context.Context, left, right net.Conn) {
 }
 
 type Connection struct {
-	ID     string           `json:"id"`
-	Peer   string           `json:"peer"`
-	Device string           `json:"device"`
-	State  string           `json:"state"`
-	Error  string           `json:"error,omitempty"`
-	Import *platform.Import `json:"import,omitempty"`
+	ID           string           `json:"id"`
+	Peer         string           `json:"peer"`
+	Device       string           `json:"device"`
+	State        string           `json:"state"`
+	Error        string           `json:"error,omitempty"`
+	RiskAccepted bool             `json:"risk_accepted,omitempty"`
+	DeviceInfo   *platform.Device `json:"device_info,omitempty"`
+	Import       *platform.Import `json:"import,omitempty"`
 }
 
 type connection struct {
@@ -136,6 +138,10 @@ type connection struct {
 }
 
 func (n *Node) connect(ctx context.Context, peer Peer, device string) (Connection, error) {
+	return n.connectWithPolicy(ctx, peer, device, false)
+}
+
+func (n *Node) connectWithPolicy(ctx context.Context, peer Peer, device string, riskAccepted bool) (Connection, error) {
 	n.clientMu.Lock()
 	defer n.clientMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -148,13 +154,21 @@ func (n *Node) connect(ctx context.Context, peer Peer, device string) (Connectio
 	}
 	for _, intent := range n.config.Connections {
 		if intent.Peer == peer.ID && intent.Device == device {
+			if riskAccepted && !intent.RiskAccepted {
+				intent.RiskAccepted = true
+				n.config.Connections[intent.ID] = intent
+				if err := n.saveLocked(); err != nil {
+					return Connection{}, err
+				}
+			}
 			if session := n.connections[intent.ID]; session != nil {
+				session.RiskAccepted = intent.RiskAccepted
 				return session.Connection, nil
 			}
 			return n.startConnectionLocked(intent), nil
 		}
 	}
-	intent := connectionIntent{ID: randomID(), Peer: peer.ID, Device: device}
+	intent := connectionIntent{ID: randomID(), Peer: peer.ID, Device: device, RiskAccepted: riskAccepted}
 	n.config.Connections[intent.ID] = intent
 	if err := n.saveLocked(); err != nil {
 		delete(n.config.Connections, intent.ID)
@@ -179,7 +193,7 @@ func (n *Node) startConnectionLocked(intent connectionIntent) Connection {
 		return current.Connection
 	}
 	lifetime, cancel := context.WithCancel(n.ctx)
-	view := Connection{ID: intent.ID, Peer: intent.Peer, Device: intent.Device, State: "connecting"}
+	view := Connection{ID: intent.ID, Peer: intent.Peer, Device: intent.Device, State: "connecting", RiskAccepted: intent.RiskAccepted}
 	session := &connection{Connection: view, cancel: cancel, done: make(chan struct{})}
 	n.connections[intent.ID] = session
 	go n.maintainConnection(lifetime, session)
@@ -204,8 +218,14 @@ func (n *Node) maintainConnection(ctx context.Context, session *connection) {
 		peer, err := n.findPeer(session.Peer)
 		if err == nil {
 			client := n.peerClient(peer.ID)
+			n.mu.Lock()
+			riskAccepted := session.RiskAccepted
+			n.mu.Unlock()
 			attemptCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-			le, acquireErr := call[Lease](attemptCtx, client, http.MethodPost, peer.Endpoint, "/v1/leases", struct{ Device string }{session.Device})
+			le, acquireErr := call[Lease](attemptCtx, client, http.MethodPost, peer.Endpoint, "/v1/leases", struct {
+				Device      string `json:"device"`
+				ConfirmRisk bool   `json:"confirm_risk"`
+			}{session.Device, riskAccepted})
 			cancel()
 			if acquireErr == nil {
 				listener, listenErr := net.Listen("tcp4", "127.0.0.1:0")
@@ -265,6 +285,12 @@ func (n *Node) releasePeer(client *http.Client, peer Peer, id string) {
 }
 
 func (n *Node) followLease(ctx context.Context, session *connection, client *http.Client, peer Peer, le Lease, listener net.Listener) error {
+	if le.DeviceInfo != nil && le.DeviceInfo.ID != "" {
+		n.mu.Lock()
+		deviceInfo := *le.DeviceInfo
+		session.DeviceInfo = &deviceInfo
+		n.mu.Unlock()
+	}
 	lifetime, cancelLifetime := context.WithCancel(ctx)
 	defer cancelLifetime()
 	address := listener.Addr().String()

@@ -10,8 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/anmh1205/anyusb/agent/esp"
@@ -87,7 +89,10 @@ func (n *Node) LocalHandler() http.Handler {
 	mux.HandleFunc("DELETE /v1/mesh/shares/{device}", empty(func(r *http.Request) error { return n.setShared(r.Context(), r.PathValue("device"), false) }))
 	mux.HandleFunc("GET /v1/mesh/connections", output(func(*http.Request) ([]Connection, error) { return n.connectionViews(), nil }))
 	mux.HandleFunc("POST /v1/mesh/connections", output(func(r *http.Request) (Connection, error) {
-		var input struct{ Peer, Device string }
+		var input struct {
+			Peer, Device string
+			ConfirmRisk  bool `json:"confirm_risk"`
+		}
 		if err := inputJSON(r, &input); err != nil {
 			return Connection{}, err
 		}
@@ -95,9 +100,16 @@ func (n *Node) LocalHandler() http.Handler {
 		if err != nil {
 			return Connection{}, err
 		}
-		return n.connect(r.Context(), peer, input.Device)
+		return n.connectWithPolicy(r.Context(), peer, input.Device, input.ConfirmRisk)
 	}))
 	mux.HandleFunc("DELETE /v1/mesh/connections/{id}", empty(func(r *http.Request) error { return n.disconnect(r.Context(), r.PathValue("id")) }))
+	mux.HandleFunc("POST /v1/mesh/connections/{id}/probe", output(func(r *http.Request) (platform.ProbeResult, error) {
+		var input struct{ Profile string }
+		if err := inputJSON(r, &input); err != nil {
+			return platform.ProbeResult{}, err
+		}
+		return n.probeConnection(r.Context(), r.PathValue("id"), input.Profile)
+	}))
 	mux.HandleFunc("GET /v1/mesh/peers/{peer}/devices", n.forward(false, func(*http.Request) string { return "/v1/shared" }))
 	mux.HandleFunc("GET /v1/mesh/peers/{peer}/events", n.forward(true, func(*http.Request) string { return "/v1/events" }))
 	mux.HandleFunc("POST /v1/mesh/peers/{peer}/esp/{device}/jobs", n.forward(false, func(r *http.Request) string { return "/v1/esp/" + url.PathEscape(r.PathValue("device")) + "/jobs" }))
@@ -105,6 +117,23 @@ func (n *Node) LocalHandler() http.Handler {
 	mux.HandleFunc("GET /v1/mesh/peers/{peer}/jobs/{id}", n.forward(false, func(r *http.Request) string { return "/v1/jobs/" + url.PathEscape(r.PathValue("id")) }))
 	mux.HandleFunc("GET /v1/mesh/peers/{peer}/jobs/{id}/logs", n.forward(true, func(r *http.Request) string { return "/v1/jobs/" + url.PathEscape(r.PathValue("id")) + "/logs" }))
 	return mux
+}
+
+func (n *Node) probeConnection(ctx context.Context, id, profile string) (platform.ProbeResult, error) {
+	profile = strings.ToLower(strings.TrimSpace(profile))
+	n.mu.Lock()
+	connection := n.connections[id]
+	if connection == nil || connection.State != "attached" || connection.Import == nil || connection.DeviceInfo == nil {
+		n.mu.Unlock()
+		return platform.ProbeResult{}, fmt.Errorf("%w: connection is not attached with device identity", platform.ErrConflict)
+	}
+	serial := connection.DeviceInfo.Serial
+	profiles := slices.Clone(connection.DeviceInfo.Profiles)
+	n.mu.Unlock()
+	if !slices.Contains(profiles, profile) {
+		return platform.ProbeResult{}, fmt.Errorf("%w: profile %q does not match the imported device", platform.ErrInvalid, profile)
+	}
+	return platform.RunProfileProbe(ctx, profile, serial)
 }
 
 func (n *Node) PeerHandler() http.Handler {
@@ -153,11 +182,14 @@ func (n *Node) PeerHandler() http.Handler {
 	peer.HandleFunc("GET /v1/shared", output(func(r *http.Request) ([]SharedDevice, error) { return n.shared(r.Context()) }))
 	peer.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) { n.serveEvents(w, r) })
 	peer.HandleFunc("POST /v1/leases", output(func(r *http.Request) (Lease, error) {
-		var input struct{ Device string }
+		var input struct {
+			Device      string
+			ConfirmRisk bool `json:"confirm_risk"`
+		}
 		if err := inputJSON(r, &input); err != nil {
 			return Lease{}, err
 		}
-		return n.acquire(r.Context(), peerID(r), input.Device, "usbip")
+		return n.acquireWithPolicy(r.Context(), peerID(r), input.Device, "usbip", input.ConfirmRisk)
 	}))
 	peer.HandleFunc("PUT /v1/leases/{id}", output(func(r *http.Request) (Lease, error) { return n.renew(peerID(r), r.PathValue("id")) }))
 	peer.HandleFunc("DELETE /v1/leases/{id}", empty(func(r *http.Request) error { return n.release(peerID(r), r.PathValue("id")) }))
