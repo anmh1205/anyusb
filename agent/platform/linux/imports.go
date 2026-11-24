@@ -160,6 +160,8 @@ func (a *Adapter) localBindings(busID string, functions []platform.USBFunction) 
 		status := "bound"
 		if function.Driver == "" && expectsKernelDriver(function.Kind) {
 			status = "driver_missing"
+		} else if function.Driver != "" && expectsKernelNode(function.Kind) {
+			status = "enumerating"
 		}
 		if function.Driver != "" || status == "driver_missing" {
 			bindings = append(bindings, platform.LocalBinding{Function: function.ID, Kind: function.Kind,
@@ -181,6 +183,15 @@ func functionFromPath(path, busID string) string {
 func expectsKernelDriver(kind string) bool {
 	switch kind {
 	case "serial", "hid", "storage", "network", "audio", "video", "printer", "input":
+		return true
+	default:
+		return false
+	}
+}
+
+func expectsKernelNode(kind string) bool {
+	switch kind {
+	case "hid", "storage", "network", "audio", "video", "printer", "input":
 		return true
 	default:
 		return false

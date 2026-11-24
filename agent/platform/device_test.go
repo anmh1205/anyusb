@@ -46,6 +46,25 @@ func TestFinalizeImportBindings(t *testing.T) {
 	}
 }
 
+func TestFinalizeImportWaitsForExpectedOSBinding(t *testing.T) {
+	got := FinalizeImport(Import{State: "attached", Bindings: []LocalBinding{
+		{Kind: "serial", ID: "/dev/ttyACM0", Status: "ready", Driver: "cdc_acm"},
+		{Kind: "storage", ID: "2-1:1.3", Status: "enumerating", Driver: "usb-storage"},
+	}})
+	if got.Readiness != "enumerating" {
+		t.Fatalf("enumerating import = %+v", got)
+	}
+}
+
+func TestGenericUSBEnumerationDoesNotStayPending(t *testing.T) {
+	got := FinalizeImport(Import{State: "attached", Bindings: []LocalBinding{
+		{Kind: "usb", ID: "/dev/bus/usb/001/002", Status: "enumerated"},
+	}})
+	if got.Readiness != "unknown" {
+		t.Fatalf("generic import = %+v", got)
+	}
+}
+
 func TestUSBAttributeNumbers(t *testing.T) {
 	if got := ParseHexAttribute("0a"); got != 10 {
 		t.Fatalf("hex interface number = %d", got)

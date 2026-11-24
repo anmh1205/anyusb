@@ -148,7 +148,7 @@ func FinalizeImport(imported Import) Import {
 	}
 	imported.SerialPorts = compactStrings(imported.SerialPorts)
 
-	ready, missing, failed := 0, 0, 0
+	ready, pending, missing, failed := 0, 0, 0, 0
 	for _, binding := range imported.Bindings {
 		status := strings.ToLower(binding.Status)
 		switch {
@@ -156,7 +156,9 @@ func FinalizeImport(imported Import) Import {
 			failed++
 		case status == "driver_missing" || status == "missing":
 			missing++
-		case binding.Kind != "usb" || binding.Driver != "":
+		case status == "enumerating":
+			pending++
+		case status == "ready" || status == "bound" || (status == "" && (binding.Kind != "usb" || binding.Driver != "")):
 			ready++
 		}
 	}
@@ -167,6 +169,8 @@ func FinalizeImport(imported Import) Import {
 		imported.Readiness = "error"
 	case missing > 0:
 		imported.Readiness = "driver_missing"
+	case pending > 0:
+		imported.Readiness = "enumerating"
 	case ready > 0:
 		imported.Readiness = "ready"
 	case len(imported.Bindings) > 0:
