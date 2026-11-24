@@ -56,10 +56,13 @@ func (a *Adapter) ListLocalDevices(ctx context.Context) ([]platform.Device, erro
 			ID: hex.EncodeToString(hash[:16]), BusID: busID, PortPath: portPath,
 			VendorID: vendor, ProductID: product, Serial: readAttribute(path, "serial"),
 			Manufacturer: readAttribute(path, "manufacturer"), Product: readAttribute(path, "product"),
-			Incarnation: busID + "/" + deviceNumber, Exported: filepath.Base(driver) == "usbip-host",
+			Incarnation: busID + "/" + deviceNumber, USBVersion: readAttribute(path, "version"),
+			Speed: readAttribute(path, "speed"), DeviceClass: readAttribute(path, "bDeviceClass"),
+			DeviceSubClass: readAttribute(path, "bDeviceSubClass"), DeviceProtocol: readAttribute(path, "bDeviceProtocol"),
+			Functions: a.usbFunctions(busID), Exported: filepath.Base(driver) == "usbip-host",
 		}
 		if readAttribute(path, "devnum") == deviceNumber {
-			devices = append(devices, device)
+			devices = append(devices, platform.EnrichDevice(device))
 		}
 	}
 	return devices, nil
@@ -146,4 +149,37 @@ func (a *Adapter) LocalSerialPorts(ctx context.Context, target string) ([]string
 		return nil, err
 	}
 	return a.serialPorts(device.BusID), nil
+}
+
+func (a *Adapter) usbFunctions(busID string) []platform.USBFunction {
+	directory := filepath.Join(a.sysRoot, "bus", "usb", "devices")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return nil
+	}
+	var functions []platform.USBFunction
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), busID+":") {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		functions = append(functions, readUSBFunction(path, entry.Name()))
+	}
+	return platform.EnrichDevice(platform.Device{Functions: functions}).Functions
+}
+
+func readUSBFunction(path, id string) platform.USBFunction {
+	driver, _ := os.Readlink(filepath.Join(path, "driver"))
+	function := platform.USBFunction{
+		ID: id, Configuration: platform.ParseDecimalAttribute(readAttribute(path, "bConfigurationValue")),
+		Interface: platform.ParseHexAttribute(readAttribute(path, "bInterfaceNumber")),
+		Alternate: platform.ParseHexAttribute(readAttribute(path, "bAlternateSetting")),
+		Class:     readAttribute(path, "bInterfaceClass"), SubClass: readAttribute(path, "bInterfaceSubClass"),
+		Protocol: readAttribute(path, "bInterfaceProtocol"), Driver: filepath.Base(driver),
+		Description: readAttribute(path, "interface"),
+	}
+	if function.Driver == "." {
+		function.Driver = ""
+	}
+	return platform.EnrichDevice(platform.Device{Functions: []platform.USBFunction{function}}).Functions[0]
 }

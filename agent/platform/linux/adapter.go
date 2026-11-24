@@ -20,6 +20,7 @@ const commandTimeout = 10 * time.Second
 type Adapter struct {
 	usbip   string
 	sysRoot string
+	devRoot string
 	hostID  string
 }
 
@@ -37,7 +38,7 @@ func New(usbipPath string) (*Adapter, error) {
 	if identity == "" || identity == "uninitialized" {
 		return nil, fmt.Errorf("/etc/machine-id is not initialized")
 	}
-	return &Adapter{usbip: usbipPath, sysRoot: "/sys", hostID: identity}, nil
+	return &Adapter{usbip: usbipPath, sysRoot: "/sys", devRoot: "/dev", hostID: identity}, nil
 }
 
 func (a *Adapter) binary(name string) (string, error) {

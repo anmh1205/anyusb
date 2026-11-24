@@ -3,6 +3,9 @@ package linux
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +21,40 @@ func TestLinuxPortInventory(t *testing.T) {
 	imports, err := parseImports(out)
 	if err != nil || len(imports) != 1 || imports[0].LocalBusID != "3-1" || imports[0].RemoteBusID != "1-4" || imports[0].RemotePort != "49152" {
 		t.Fatalf("Linux inventory = %+v, %v", imports, err)
+	}
+}
+
+func TestUSBFunctionsParseCompositeDescriptors(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "interfaces")
+	var functions []platform.USBFunction
+	for _, fixture := range []struct {
+		name, number, class string
+	}{
+		{"3-1:1.0", "00", "ff"},
+		{"3-1:1.1", "01", "03"},
+		{"3-1:1.10", "0a", "08"},
+	} {
+		dir := filepath.Join(base, strings.ReplaceAll(fixture.name, ":", "_"))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]string{
+			"bConfigurationValue": "1", "bInterfaceNumber": fixture.number,
+			"bAlternateSetting": "00", "bInterfaceClass": fixture.class,
+			"bInterfaceSubClass": "00", "bInterfaceProtocol": "00",
+		} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(value+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		functions = append(functions, readUSBFunction(dir, fixture.name))
+	}
+	if len(functions) != 3 || functions[0].Kind != "vendor" || functions[1].Kind != "hid" || functions[2].Kind != "storage" {
+		t.Fatalf("composite functions = %+v", functions)
+	}
+	if functions[2].Configuration != 1 || functions[2].Interface != 10 {
+		t.Fatalf("hex interface descriptor = %+v", functions[2])
 	}
 }
 

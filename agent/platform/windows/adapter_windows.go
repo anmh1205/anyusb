@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -93,35 +92,46 @@ type deviceState struct {
 }
 
 type pnpDevice struct {
-	InstanceID, Location, Port string
-	Virtual                    bool
-	VirtualPort                int
+	InstanceID, Parent, Location, Port      string
+	Class, ClassGUID, FriendlyName, Service string
+	Status, Problem                         string
+	Virtual                                 bool
+	VirtualPort                             int
 }
 
 const pnpScript = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ids = [Console]::In.ReadToEnd() | ConvertFrom-Json
-$com = @(Get-PnpDevice -Class Ports -PresentOnly -ErrorAction SilentlyContinue)
+$all = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue)
 $parents = @{}
+function Get-PropertyData([string] $id, [string] $key) {
+    if ([string]::IsNullOrEmpty($id)) { return '' }
+    return (Get-PnpDeviceProperty -InstanceId $id -KeyName $key -ErrorAction SilentlyContinue).Data
+}
+function Get-Parent([string] $id) {
+    if (!$parents.ContainsKey($id)) { $parents[$id] = [string](Get-PropertyData $id 'DEVPKEY_Device_Parent') }
+    return [string]$parents[$id]
+}
 function Test-Win2Ancestry([string] $id) {
     for ($i = 0; $id -and $i -lt 12; $i++) {
         if ($id.StartsWith('ROOT\USBIP_WIN2\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
-        if (!$parents.ContainsKey($id)) {
-            $parents[$id] = (Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_Parent -ErrorAction SilentlyContinue).Data
-        }
-        $id = $parents[$id]
+        $id = Get-Parent $id
+    }
+    return $false
+}
+function Test-RequestedAncestry([string] $id) {
+    for ($i = 0; $id -and $i -lt 12; $i++) {
+        foreach ($root in $ids) { if ($id -eq [string]$root) { return $true } }
+        $id = Get-Parent $id
     }
     return $false
 }
 function Get-Win2Port([string] $id) {
     for ($i = 0; $id -and $i -lt 12; $i++) {
-        if (!$parents.ContainsKey($id)) {
-            $parents[$id] = (Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_Parent -ErrorAction SilentlyContinue).Data
-        }
-        $parent = [string]$parents[$id]
+        $parent = Get-Parent $id
         if ($parent.StartsWith('USB\ROOT_HUB', [StringComparison]::OrdinalIgnoreCase) -and (Test-Win2Ancestry $parent)) {
-            $value = (Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_Address -ErrorAction SilentlyContinue).Data
+            $value = Get-PropertyData $id 'DEVPKEY_Device_Address'
             $number = 0
             if ([int]::TryParse([string]$value, [ref]$number) -and $number -gt 0) { return $number }
             return 0
@@ -130,20 +140,36 @@ function Get-Win2Port([string] $id) {
     }
     return 0
 }
+function New-Device([string] $id, $dev) {
+    $paths = Get-PropertyData $id 'DEVPKEY_Device_LocationPaths'
+    $virtual = Test-Win2Ancestry $id
+    $port = ''
+    $friendly = [string]$dev.FriendlyName
+    if ($friendly -match '\((COM\d+)\)') { $port = $Matches[1] }
+    [pscustomobject]@{
+        InstanceID=$id; Parent=$(Get-Parent $id); Location=[string](@($paths | Sort-Object)[0]); Port=$port
+        Class=[string]$dev.Class; ClassGUID=[string](Get-PropertyData $id 'DEVPKEY_Device_ClassGuid')
+        FriendlyName=$friendly; Service=[string](Get-PropertyData $id 'DEVPKEY_Device_Service')
+        Status=[string]$dev.Status; Problem=[string](Get-PropertyData $id 'DEVPKEY_Device_ProblemCode')
+        Virtual=$virtual; VirtualPort=$(if ($virtual) { Get-Win2Port $id } else { 0 })
+    }
+}
 $result = @(
+    $seen = @{}
     foreach ($rawId in $ids) {
         $id = [string]$rawId
         if ([string]::IsNullOrEmpty($id)) { continue }
-        $paths = Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_LocationPaths -ErrorAction SilentlyContinue
-        $virtual = Test-Win2Ancestry $id
-        [pscustomobject]@{InstanceID=$id; Location=[string](@($paths.Data | Sort-Object)[0]); Port=''; Virtual=$virtual; VirtualPort=$(if ($virtual) { Get-Win2Port $id } else { 0 })}
+        $dev = $all | Where-Object InstanceId -EQ $id | Select-Object -First 1
+        if (!$dev) { $dev = [pscustomobject]@{InstanceId=$id; FriendlyName=''; Class=''; Status=''} }
+        $seen[$id] = $true
+        New-Device $id $dev
     }
-    foreach ($dev in $com) {
-        if ($dev.FriendlyName -match '\((COM\d+)\)') {
-            $port = $Matches[1]
-            $paths = Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName DEVPKEY_Device_LocationPaths -ErrorAction SilentlyContinue
-            $virtual = Test-Win2Ancestry $dev.InstanceId
-            [pscustomobject]@{InstanceID=[string]$dev.InstanceId; Location=[string](@($paths.Data | Sort-Object)[0]); Port=[string]$port; Virtual=$virtual; VirtualPort=$(if ($virtual) { Get-Win2Port $dev.InstanceId } else { 0 })}
+    foreach ($dev in $all) {
+        $id = [string]$dev.InstanceId
+        if ([string]::IsNullOrEmpty($id) -or $seen.ContainsKey($id)) { continue }
+        if ((Test-Win2Ancestry $id) -or (Test-RequestedAncestry $id)) {
+            $seen[$id] = $true
+            New-Device $id $dev
         }
     }
 )
@@ -216,11 +242,13 @@ func (a *Adapter) inventory(ctx context.Context) ([]platform.Device, map[string]
 			serial = parts[2]
 		}
 		key := sha256.Sum256([]byte("anyusb-device-v1\x00" + a.identity + "\x00" + location))
-		devices = append(devices, platform.Device{
+		device := platform.Device{
 			ID: fmt.Sprintf("%x", key[:16]), BusID: item.BusID, PortPath: location,
 			Incarnation: item.InstanceID, VendorID: strings.ToLower(vidpid[1]), ProductID: strings.ToLower(vidpid[2]),
-			Serial: serial, Product: item.Description, Exported: item.PersistedGuid != "",
-		})
+			Serial: serial, Product: item.Description, Functions: pnpFunctions(item.InstanceID, ports),
+			Exported: item.PersistedGuid != "",
+		}
+		devices = append(devices, platform.EnrichDevice(device))
 		byBus[item.BusID] = item
 	}
 	return devices, byBus, ports, nil
@@ -360,12 +388,20 @@ func (a *Adapter) ListImports(ctx context.Context) ([]platform.Import, error) {
 		return imports, err
 	}
 	if ports, pnpErr := pnp(ctx, []string{}); pnpErr == nil {
-		mapImportCOM(imports, ports)
+		mapImportBindings(imports, ports)
+	} else {
+		for i := range imports {
+			imports[i] = platform.FinalizeImport(imports[i])
+		}
 	}
 	return imports, nil
 }
 
 func mapImportCOM(imports []platform.Import, devices []pnpDevice) {
+	mapImportBindings(imports, devices)
+}
+
+func mapImportBindings(imports []platform.Import, devices []pnpDevice) {
 	matches := make(map[string]int)
 	for _, entry := range imports {
 		if ids := importedID.FindStringSubmatch(entry.Name); ids != nil {
@@ -373,32 +409,112 @@ func mapImportCOM(imports []platform.Import, devices []pnpDevice) {
 		}
 	}
 	for i := range imports {
-		for _, port := range devices {
-			if port.Virtual && port.Port != "" && port.VirtualPort == imports[i].Port {
-				imports[i].SerialPorts = append(imports[i].SerialPorts, port.Port)
+		for _, device := range devices {
+			if device.Virtual && device.VirtualPort == imports[i].Port {
+				kind := pnpKind(device)
+				identifier := device.InstanceID
+				if device.Port != "" {
+					identifier, kind = device.Port, "serial"
+				}
+				status, problem := "ready", strings.TrimSpace(device.Problem)
+				if device.Status != "" && !strings.EqualFold(device.Status, "OK") {
+					status = "error"
+					if problem == "" {
+						problem = device.Status
+					}
+				} else if device.Service == "" && device.Port == "" && expectsWindowsDriver(kind) {
+					status = "driver_missing"
+				}
+				imports[i].Bindings = append(imports[i].Bindings, platform.LocalBinding{
+					Function: device.InstanceID, Kind: kind, ID: identifier, Driver: device.Service, Status: status, Problem: problem,
+				})
+				if device.InstanceID != "" {
+					imports[i].Functions = append(imports[i].Functions, platform.USBFunction{
+						ID: device.InstanceID, Kind: kind, Driver: device.Service, Description: device.FriendlyName,
+					})
+				}
 			}
 		}
-		if len(imports[i].SerialPorts) != 0 {
-			slices.Sort(imports[i].SerialPorts)
-			imports[i].SerialPorts = slices.Compact(imports[i].SerialPorts)
-			continue
-		}
-		ids := importedID.FindStringSubmatch(imports[i].Name)
-		if ids == nil {
-			continue
-		}
-		key := strings.ToLower(ids[1] + ":" + ids[2])
-		if matches[key] != 1 {
-			continue
-		} // Ambiguous duplicates are left for the operator to resolve.
-		for _, port := range devices {
-			vidpid := hardwareID.FindStringSubmatch(port.InstanceID)
-			if port.Virtual && port.Port != "" && len(vidpid) == 3 && strings.EqualFold(vidpid[1]+":"+vidpid[2], key) {
-				imports[i].SerialPorts = append(imports[i].SerialPorts, port.Port)
+		if len(imports[i].Bindings) == 0 {
+			ids := importedID.FindStringSubmatch(imports[i].Name)
+			if ids != nil {
+				key := strings.ToLower(ids[1] + ":" + ids[2])
+				if matches[key] == 1 {
+					for _, device := range devices {
+						vidpid := hardwareID.FindStringSubmatch(device.InstanceID)
+						if device.Virtual && device.Port != "" && len(vidpid) == 3 && strings.EqualFold(vidpid[1]+":"+vidpid[2], key) {
+							imports[i].Bindings = append(imports[i].Bindings, platform.LocalBinding{Function: device.InstanceID,
+								Kind: "serial", ID: device.Port, Driver: device.Service, Status: "ready"})
+						}
+					}
+				}
 			}
 		}
-		slices.Sort(imports[i].SerialPorts)
-		imports[i].SerialPorts = slices.Compact(imports[i].SerialPorts)
+		imports[i] = platform.FinalizeImport(imports[i])
+	}
+}
+
+func pnpFunctions(parent string, devices []pnpDevice) []platform.USBFunction {
+	byID := make(map[string]pnpDevice, len(devices))
+	for _, device := range devices {
+		byID[strings.ToUpper(device.InstanceID)] = device
+	}
+	var functions []platform.USBFunction
+	for _, device := range devices {
+		if strings.EqualFold(device.InstanceID, parent) || !pnpDescendsFrom(device, parent, byID) {
+			continue
+		}
+		functions = append(functions, platform.USBFunction{ID: device.InstanceID, Kind: pnpKind(device), Driver: device.Service, Description: device.FriendlyName})
+	}
+	return functions
+}
+
+func pnpDescendsFrom(device pnpDevice, parent string, byID map[string]pnpDevice) bool {
+	current := device.Parent
+	for i := 0; current != "" && i < 12; i++ {
+		if strings.EqualFold(current, parent) {
+			return true
+		}
+		current = byID[strings.ToUpper(current)].Parent
+	}
+	return false
+}
+
+func pnpKind(device pnpDevice) string {
+	class := strings.ToLower(device.Class)
+	label := strings.ToLower(device.FriendlyName)
+	switch {
+	case device.Port != "" || class == "ports":
+		return "serial"
+	case strings.Contains(label, "usb hub") || strings.Contains(label, "root hub"):
+		return "hub"
+	case strings.Contains(label, "st-link") || strings.Contains(label, "stlink") || strings.Contains(label, "j-link") || strings.Contains(label, "jlink") || strings.Contains(label, "cmsis-dap"):
+		return "debug"
+	case class == "hidclass":
+		return "hid"
+	case class == "diskdrive" || class == "volume":
+		return "storage"
+	case class == "net" || class == "bluetooth":
+		return "network"
+	case class == "audioendpoint" || class == "media":
+		return "audio"
+	case class == "camera" || class == "image":
+		return "video"
+	case class == "printer":
+		return "printer"
+	case class == "smartcardreader":
+		return "security"
+	default:
+		return "usb"
+	}
+}
+
+func expectsWindowsDriver(kind string) bool {
+	switch kind {
+	case "serial", "debug", "hid", "storage", "network", "audio", "video", "printer", "security":
+		return true
+	default:
+		return false
 	}
 }
 

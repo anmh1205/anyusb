@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -125,7 +126,7 @@ func inventoryChanges(previous, current []Device) []HotplugEvent {
 			kind = "exported"
 		case before.Exported && !device.Exported:
 			kind = "unexported"
-		case before != device:
+		case !reflect.DeepEqual(before, device):
 			kind = "changed"
 		}
 		if kind != "" {

@@ -36,7 +36,9 @@ func (a *Adapter) ListImports(ctx context.Context) ([]platform.Import, error) {
 		return nil, err
 	}
 	for i := range imports {
-		imports[i].SerialPorts = a.serialPorts(imports[i].LocalBusID)
+		imports[i].Functions = a.usbFunctions(imports[i].LocalBusID)
+		imports[i].Bindings = a.localBindings(imports[i].LocalBusID, imports[i].Functions)
+		imports[i] = platform.FinalizeImport(imports[i])
 	}
 	return imports, nil
 }
@@ -84,6 +86,16 @@ func parseImports(output string) ([]platform.Import, error) {
 }
 
 func (a *Adapter) serialPorts(busID string) []string {
+	var ports []string
+	for _, binding := range a.localBindings(busID, a.usbFunctions(busID)) {
+		if binding.Kind == "serial" && (binding.Status == "ready" || binding.Status == "") {
+			ports = append(ports, binding.ID)
+		}
+	}
+	return ports
+}
+
+func (a *Adapter) localBindings(busID string, functions []platform.USBFunction) []platform.LocalBinding {
 	if busID == "" {
 		return nil
 	}
@@ -91,22 +103,88 @@ func (a *Adapter) serialPorts(busID string) []string {
 	if err != nil {
 		return nil
 	}
-	ttyDirectory := filepath.Join(a.sysRoot, "class", "tty")
-	entries, err := os.ReadDir(ttyDirectory)
-	if err != nil {
-		return nil
+	functionDrivers := make(map[string]string)
+	for _, function := range functions {
+		functionDrivers[function.ID] = function.Driver
 	}
-	var ports []string
-	for _, entry := range entries {
-		devicePath, err := filepath.EvalSymlinks(filepath.Join(ttyDirectory, entry.Name(), "device"))
-		if err == nil && strings.HasPrefix(devicePath, usbPath+"/") {
-			node := filepath.Join("/dev", entry.Name())
-			if info, err := os.Stat(node); err == nil && info.Mode()&os.ModeCharDevice != 0 {
-				ports = append(ports, node)
+	var bindings []platform.LocalBinding
+	classes := []struct {
+		name, kind, prefix string
+	}{
+		{"tty", "serial", ""}, {"hidraw", "hid", ""}, {"block", "storage", ""},
+		{"net", "network", ""}, {"input", "input", "event"},
+	}
+	for _, class := range classes {
+		directory := filepath.Join(a.sysRoot, "class", class.name)
+		entries, readErr := os.ReadDir(directory)
+		if readErr != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if class.prefix != "" && !strings.HasPrefix(entry.Name(), class.prefix) {
+				continue
 			}
+			devicePath, resolveErr := filepath.EvalSymlinks(filepath.Join(directory, entry.Name(), "device"))
+			if resolveErr != nil || (devicePath != usbPath && !strings.HasPrefix(devicePath, usbPath+string(os.PathSeparator))) {
+				continue
+			}
+			function := functionFromPath(devicePath, busID)
+			identifier := entry.Name()
+			switch class.kind {
+			case "serial", "hid", "storage":
+				identifier = filepath.Join(a.devRoot, entry.Name())
+			case "input":
+				identifier = filepath.Join(a.devRoot, "input", entry.Name())
+			}
+			bindings = append(bindings, platform.LocalBinding{Function: function, Kind: class.kind, ID: identifier,
+				Driver: functionDrivers[function], Status: "ready"})
 		}
 	}
-	return ports
+	base := filepath.Join(a.sysRoot, "bus", "usb", "devices", busID)
+	busNumber, deviceNumber := readAttribute(base, "busnum"), readAttribute(base, "devnum")
+	if busNumber != "" && deviceNumber != "" {
+		bus, busErr := strconv.Atoi(busNumber)
+		device, deviceErr := strconv.Atoi(deviceNumber)
+		if busErr == nil && deviceErr == nil {
+			bindings = append(bindings, platform.LocalBinding{Kind: "usb", ID: filepath.Join(a.devRoot, "bus", "usb", fmt.Sprintf("%03d", bus), fmt.Sprintf("%03d", device)), Status: "enumerated"})
+		}
+	}
+	seenFunctions := make(map[string]bool)
+	for _, binding := range bindings {
+		seenFunctions[binding.Function] = true
+	}
+	for _, function := range functions {
+		if seenFunctions[function.ID] {
+			continue
+		}
+		status := "bound"
+		if function.Driver == "" && expectsKernelDriver(function.Kind) {
+			status = "driver_missing"
+		}
+		if function.Driver != "" || status == "driver_missing" {
+			bindings = append(bindings, platform.LocalBinding{Function: function.ID, Kind: function.Kind,
+				ID: function.ID, Driver: function.Driver, Status: status})
+		}
+	}
+	return bindings
+}
+
+func functionFromPath(path, busID string) string {
+	for _, part := range strings.Split(filepath.Clean(path), string(os.PathSeparator)) {
+		if strings.HasPrefix(part, busID+":") {
+			return part
+		}
+	}
+	return ""
+}
+
+func expectsKernelDriver(kind string) bool {
+	switch kind {
+	case "serial", "hid", "storage", "network", "audio", "video", "printer", "input":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *Adapter) Attach(ctx context.Context, host, busID string) (platform.Import, error) {

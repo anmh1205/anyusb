@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/anmh1205/anyusb/agent/platform"
@@ -45,6 +46,30 @@ func TestWin2COMMappingUsesVirtualHubPortForIdenticalDevices(t *testing.T) {
 	}
 	if len(imports[1].SerialPorts) != 1 || imports[1].SerialPorts[0] != "COM11" {
 		t.Fatalf("port 4 serial mapping = %v", imports[1].SerialPorts)
+	}
+}
+
+func TestWin2CompositeBindingsStayOnTheirVirtualPorts(t *testing.T) {
+	imports := []platform.Import{
+		{Port: 3, State: "attached", Name: "ST-LINK (0483:374b)"},
+		{Port: 4, State: "attached", Name: "ST-LINK (0483:374b)"},
+	}
+	mapImportBindings(imports, []pnpDevice{
+		{InstanceID: `USB\VID_0483&PID_374B&MI_00\A`, Virtual: true, VirtualPort: 3, Class: "USB", FriendlyName: "ST-Link Debug", Service: "WinUSB", Status: "OK"},
+		{InstanceID: `USB\VID_0483&PID_374B&MI_02\A`, Virtual: true, VirtualPort: 3, Class: "Ports", FriendlyName: "ST-Link VCP (COM8)", Port: "COM8", Service: "usbser", Status: "OK"},
+		{InstanceID: `USB\VID_0483&PID_374B&MI_00\B`, Virtual: true, VirtualPort: 4, Class: "USB", FriendlyName: "ST-Link Debug", Status: "OK"},
+		{InstanceID: `USB\VID_0483&PID_374B&MI_02\B`, Virtual: true, VirtualPort: 4, Class: "Ports", FriendlyName: "ST-Link VCP (COM11)", Port: "COM11", Service: "usbser", Status: "OK"},
+	})
+	if imports[0].Readiness != "ready" || len(imports[0].Bindings) != 2 || imports[0].SerialPorts[0] != "COM8" {
+		t.Fatalf("port 3 composite import = %+v", imports[0])
+	}
+	if imports[1].Readiness != "degraded" || len(imports[1].Bindings) != 2 || imports[1].SerialPorts[0] != "COM11" {
+		t.Fatalf("port 4 composite import = %+v", imports[1])
+	}
+	for _, binding := range imports[0].Bindings {
+		if strings.HasSuffix(binding.Function, `\B`) {
+			t.Fatalf("port 3 received a port 4 binding: %+v", binding)
+		}
 	}
 }
 
