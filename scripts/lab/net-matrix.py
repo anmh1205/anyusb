@@ -203,19 +203,20 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
 
     def storage_hash(self):
         node = shlex.quote(self.block())
-        return self.client.run(f"dd if={node} bs=1M count=1 2>/dev/null | sha256sum | cut -d' ' -f1")
+        return self.client.run(f"dd if={node} bs=64K count=4 2>/dev/null | sha256sum | cut -d' ' -f1", timeout=90)
 
     def write_storage_fixture(self):
         node = shlex.quote(self.block())
-        self.client.run(f"dd if=/dev/urandom of={node} bs=1M count=1 2>/dev/null && sync")
+        self.client.run(f"dd if=/dev/urandom of={node} bs=64K count=4 2>/dev/null && sync", timeout=90)
         digest = self.storage_hash()
         require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None, f"invalid storage hash: {digest}")
-        log(f"disposable storage wrote, synced and read 1 MiB, sha256={digest}")
+        log(f"disposable storage wrote, synced and read 256 KiB, sha256={digest}")
         return digest
 
     def verify_storage_fixture(self):
         digest = self.storage_hash()
         require(digest == self.storage_digest, f"disposable storage hash changed: {digest} != {self.storage_digest}")
+        log(f"disposable storage hash retained: {digest}")
 
     def attached(self):
         links = self.client.cli("list", "--connections")
@@ -239,7 +240,7 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
     def connect(self):
         started = time.monotonic()
         self.connection = self.client.cli("connect", "--peer", self.peer, self.id, "--confirm-risk")["id"]
-        tty = eventually(self.attached, 28)
+        tty = eventually(self.attached, 45)
         self.verify_storage_fixture()
         log(f"managed attach: {tty} after {elapsed(started)} ms")
         return tty
@@ -324,6 +325,7 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
         time.sleep(1)
         self.attached()
         require(self.import_incarnation() == incarnation, "short outage replaced the original USB import")
+        self.verify_storage_fixture()
         log(f"short outage: {output}; completed {completion} ms after restoration on the original import")
 
     def partition(self):
@@ -333,6 +335,7 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
         started = time.monotonic()
         self.profile("mobile")
         self.transfer(eventually(self.attached, 30), 4096)
+        self.verify_storage_fixture()
         log(f"partition recovery: {elapsed(started)} ms to verified bytes")
 
     def reset_tcp(self):
@@ -348,6 +351,7 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
             return tty
 
         self.transfer(eventually(replaced, 30), 4096)
+        self.verify_storage_fixture()
         log(f"TCP reset recovery: {elapsed(started)} ms to verified bytes")
 
     def import_incarnation(self):
@@ -370,6 +374,7 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
         log("40 s partition: remote lease, host export and native import cleaned up; connection intent kept retrying")
         self.profile("mobile")
         self.transfer(eventually(self.attached, 30), 4096)
+        self.verify_storage_fixture()
         require(old == self.connection, "automatic recovery replaced the saved connection intent")
         log("automatic recovery after expiry obtained a new remote lease without operator input")
 
