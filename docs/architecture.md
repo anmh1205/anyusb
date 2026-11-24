@@ -6,9 +6,9 @@ control plane, Remote ESP operations, local web UI and CLI.
 
 The data plane forwards a whole USB device; COM/tty discovery is only one kind
 of client-side binding. The [general USB support plan](general-usb-support.md)
-defines the proposed function/binding model, ST-Link and J-Link validation, and
-class-aware compatibility work without changing that whole-device lease
-boundary.
+defines the implemented function/binding model and class-aware policy plus the
+remaining physical ST-Link/J-Link compatibility work, without changing that
+whole-device lease boundary.
 
 ## Components and interfaces
 

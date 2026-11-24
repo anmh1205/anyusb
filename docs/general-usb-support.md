@@ -35,6 +35,33 @@ inside the USB/IP tunnel.
   lease boundary. Timing-sensitive and high-bandwidth devices remain
   experimental until their workloads pass a dedicated lab procedure.
 
+## Implementation status
+
+**2026-11-24 software baseline:** ADR 0006, the additive function/binding
+model, Linux sysfs discovery, Windows exact-virtual-port PnP discovery,
+readiness aggregation, risk confirmation, hub rejection, USB-neutral CLI/UI,
+optional ST-Link/J-Link/CMSIS-DAP probes, schemas and lab procedures are
+implemented. The [software and virtual-composite report](test-report/general-usb-software-2026-11-24.md)
+records 42 Go tests, vet, race, four cross-build targets and a passing two-VM
+CDC + vendor-HID + mass-storage matrix with storage integrity checks.
+
+Milestone evidence is intentionally split:
+
+- M0 and the software scope of M1 are complete.
+- M2 is verified for the Linux virtual composite and Windows topology fixtures;
+  real usbip-win2 driver behavior remains `UNVERIFIED` on this host.
+- M3 profile probes and guidance are implemented, but physical ST-Link, J-Link
+  and CMSIS-DAP rows remain `UNVERIFIED` because none of those probes or vendor
+  tools were present.
+- M4 policy and the disposable virtual HID/storage workload are verified;
+  physical storage-loss, keyboard/mouse, token, network and audio/video rows
+  remain `UNVERIFIED`.
+- M5 software hardening and the adverse-network virtual baseline pass. Physical
+  upgrade, sleep/resume and exact hardware rows remain open evidence, not
+  hidden support claims.
+- M6 remains closed by design: no vendor provider is added without a concrete
+  failed or high-value J-Link USB/IP row and a separate ADR.
+
 ## Current-state audit
 
 | Area | Observed in the repository | Consequence |
