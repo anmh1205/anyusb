@@ -42,7 +42,7 @@ model, Linux sysfs discovery, Windows exact-virtual-port PnP discovery,
 readiness aggregation, risk confirmation, hub rejection, USB-neutral CLI/UI,
 optional ST-Link/J-Link/CMSIS-DAP probes, schemas and lab procedures are
 implemented. The [software and virtual-composite report](test-report/general-usb-software-2026-11-24.md)
-records 42 Go tests, vet, race, four cross-build targets and a passing two-VM
+records 46 Go test events, vet, race, four cross-build targets and a passing two-VM
 CDC + vendor-HID + mass-storage matrix with storage integrity checks.
 
 Milestone evidence is intentionally split:

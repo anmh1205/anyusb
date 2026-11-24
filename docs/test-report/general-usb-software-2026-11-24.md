@@ -2,8 +2,10 @@
 
 **Run date:** 2026-11-24 (Asia/Saigon)
 
-**Source under test:** `93a757065132b487be438442fb6300c0f0a2a146` plus the
-report-only documentation update that follows this run
+**Virtual-lab source:** `93a757065132b487be438442fb6300c0f0a2a146`
+
+**Final software-suite source:** `54127f05b4ef9036fa6163c5b39c2610288c05c4`
+plus the report-only documentation update that follows this run
 
 **Result:** software and isolated Linux virtual-composite scope passed;
 physical ST-Link, J-Link, CMSIS-DAP and Windows USB/IP hardware rows remain
@@ -47,8 +49,8 @@ Get-Content docs/api/openapi.json -Raw | ConvertFrom-Json -Depth 100
 git diff --check
 ```
 
-All passed. `go test -json ./...` counted 42 passing tests across seven tested
-packages (plus two packages with no test files): ESP 3, mesh 10, platform 18,
+All passed. `go test -json ./...` counted 46 passing test events across seven tested
+packages (plus two packages with no test files): ESP 3, mesh 10, platform 22,
 Linux adapter 3, Windows adapter 5, CLI 1 and web 2. Race tests passed for all
 of the same tested packages. The OpenAPI document parsed with 12 paths and nine
 schemas.
@@ -65,7 +67,9 @@ Cross-build output:
 Fixtures cover serial-only, composite, HID, storage, hub, known debug probes,
 unknown devices, partial binding, duplicate bindings, two identical Windows
 imports on different usbip-win2 virtual ports, risk acceptance persistence,
-hub rejection and an explicit missing optional profile tool. Windows PnP tests
+hub rejection, an explicit missing optional profile tool and successful
+read-only ST-Link/J-Link/CMSIS-DAP subprocess fixtures with version and serial
+matching. Windows PnP tests
 executed against Windows PowerShell but did not install or exercise usbip-win2.
 
 ## Isolated composite USB/IP lab
