@@ -150,14 +150,25 @@ class Matrix:
                 for guest in (self.host, self.client)]
 
     def prepare(self):
-        self.host.run(f"""(set -e
+        self.host.run(fr"""(set -e
 g={GADGET}
 mkdir "$g"
 echo 0x1209 >"$g/idVendor"
 echo 0xa11b >"$g/idProduct"
-mkdir "$g/strings/0x409" "$g/configs/c.1" "$g/functions/acm.usb0"
-echo anyusb-net-lab >"$g/strings/0x409/serialnumber"
+mkdir "$g/strings/0x409" "$g/configs/c.1" "$g/configs/c.1/strings/0x409"
+echo anyusb-composite-lab >"$g/strings/0x409/serialnumber"
+echo 'AnyUSB disposable CDC + HID + storage' >"$g/configs/c.1/strings/0x409/configuration"
+mkdir "$g/functions/acm.usb0" "$g/functions/hid.usb0" "$g/functions/mass_storage.usb0"
+echo 0 >"$g/functions/hid.usb0/protocol"
+echo 0 >"$g/functions/hid.usb0/subclass"
+echo 8 >"$g/functions/hid.usb0/report_length"
+printf '\006\000\377\011\001\241\001\025\000\046\377\000\165\010\225\010\011\001\201\002\225\010\011\001\221\002\300' >"$g/functions/hid.usb0/report_desc"
+dd if=/dev/zero of=/tmp/anyusb-mass.img bs=1M count=8 status=none
+echo 1 >"$g/functions/mass_storage.usb0/lun.0/removable"
+echo /tmp/anyusb-mass.img >"$g/functions/mass_storage.usb0/lun.0/file"
 ln -s "$g/functions/acm.usb0" "$g/configs/c.1/acm.usb0"
+ln -s "$g/functions/hid.usb0" "$g/configs/c.1/hid.usb0"
+ln -s "$g/functions/mass_storage.usb0" "$g/configs/c.1/mass_storage.usb0"
 ls /sys/class/udc | head -n 1 >"$g/UDC"
 usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
 /lab/ttycheck echo /dev/ttyGS0 </dev/null >/tmp/echo.log 2>&1 &
@@ -166,7 +177,9 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
         self.client.start_agent(CLIENT)
         self.device = eventually(self.present)
         self.id = self.device["id"]
-        log(f"CDC: {self.device['bus_id']} {self.id}, {self.device['incarnation']}")
+        profiles = set(self.device.get("profiles", []))
+        require({"serial", "hid", "storage"}.issubset(profiles), f"composite profiles: {self.device}")
+        log(f"composite CDC/HID/storage: {self.device['bus_id']} {self.id}, {self.device['incarnation']}")
 
     def present(self):
         devices = [d for d in self.host.cli("list") if (d.get("vendor_id"), d.get("product_id")) == ("1209", "a11b")]
@@ -176,7 +189,33 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
     def tty(self):
         imports = self.client.cli("list", "--imports")
         require(len(imports) == 1 and len(imports[0].get("serial_ports", [])) == 1, f"client imports: {imports}")
+        kinds = {binding.get("kind") for binding in imports[0].get("local_bindings", [])}
+        require({"serial", "hid", "storage"}.issubset(kinds), f"composite client bindings: {imports}")
+        require(imports[0].get("readiness") in ("ready", "degraded"), f"composite readiness: {imports}")
         return imports[0]["serial_ports"][0]
+
+    def block(self):
+        imports = self.client.cli("list", "--imports")
+        nodes = [binding["id"] for binding in imports[0].get("local_bindings", [])
+                 if binding.get("kind") == "storage" and binding.get("status") == "ready"] if len(imports) == 1 else []
+        require(len(nodes) == 1, f"expected one disposable block binding: {imports}")
+        return nodes[0]
+
+    def storage_hash(self):
+        node = shlex.quote(self.block())
+        return self.client.run(f"dd if={node} bs=1M count=1 2>/dev/null | sha256sum | cut -d' ' -f1")
+
+    def write_storage_fixture(self):
+        node = shlex.quote(self.block())
+        self.client.run(f"dd if=/dev/urandom of={node} bs=1M count=1 2>/dev/null && sync")
+        digest = self.storage_hash()
+        require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None, f"invalid storage hash: {digest}")
+        log(f"disposable storage wrote, synced and read 1 MiB, sha256={digest}")
+        return digest
+
+    def verify_storage_fixture(self):
+        digest = self.storage_hash()
+        require(digest == self.storage_digest, f"disposable storage hash changed: {digest} != {self.storage_digest}")
 
     def attached(self):
         links = self.client.cli("list", "--connections")
@@ -199,8 +238,9 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
 
     def connect(self):
         started = time.monotonic()
-        self.connection = self.client.cli("connect", "--peer", self.peer, self.id)["id"]
+        self.connection = self.client.cli("connect", "--peer", self.peer, self.id, "--confirm-risk")["id"]
         tty = eventually(self.attached, 28)
+        self.verify_storage_fixture()
         log(f"managed attach: {tty} after {elapsed(started)} ms")
         return tty
 
@@ -223,7 +263,9 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
             listed = self.client.cli("list", "--remote", HOST)
             require(len(listed) == 1 and listed[0]["bus_id"] == bus, f"remote list: {listed}")
             self.client.cli("connect", HOST, bus)
-            self.transfer(eventually(self.tty), 32768)
+            tty = eventually(self.tty)
+            self.storage_digest = self.write_storage_fixture()
+            self.transfer(tty, 32768)
         finally:
             for imported in self.client.cli("list", "--imports"):
                 self.client.cli("disconnect", str(imported["port"]))
@@ -254,6 +296,7 @@ usbipd -4 -t 3240 </dev/null >/tmp/usbipd.log 2>&1 &
         started = time.monotonic()
         self.host.run(f"ls /sys/class/udc | head -n 1 >{GADGET}/UDC")
         self.transfer(eventually(self.attached, 30), 4096)
+        self.verify_storage_fixture()
         device = self.present()
         require(device["id"] == self.id and device["incarnation"] != self.device["incarnation"],
                 f"unexpected USB incarnation: {device}")

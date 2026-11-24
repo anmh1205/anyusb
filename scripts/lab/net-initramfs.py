@@ -15,7 +15,8 @@ PACKAGES = (
 )
 MODULE_PREFIXES = (
     "kernel/drivers/usb/gadget/", "kernel/drivers/usb/class/", "kernel/drivers/usb/usbip/",
-    "kernel/drivers/usb/core/", "kernel/drivers/usb/common/", "kernel/fs/configfs/",
+    "kernel/drivers/usb/core/", "kernel/drivers/usb/common/", "kernel/drivers/usb/storage/",
+    "kernel/drivers/hid/", "kernel/drivers/scsi/", "kernel/fs/configfs/",
     "kernel/drivers/net/ethernet/intel/e1000/", "kernel/net/sched/sch_netem.",
     "kernel/net/ipv4/inet_diag.", "kernel/net/ipv4/tcp_diag.", "modules.",
 )

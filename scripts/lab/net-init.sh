@@ -16,7 +16,7 @@ esac
 ln -sf /bin/kmod /sbin/depmod
 ln -sf /bin/kmod /sbin/modprobe
 depmod -a
-for driver in e1000 sch_netem inet_diag tcp_diag dummy_hcd libcomposite usb_f_acm cdc_acm usbip_host vhci_hcd; do
+for driver in e1000 sch_netem inet_diag tcp_diag dummy_hcd libcomposite usb_f_acm usb_f_hid usb_f_mass_storage cdc_acm usbhid hid_generic usb_storage sd_mod usbip_host vhci_hcd; do
     modprobe "$driver"
 done
 mount -t configfs configfs /sys/kernel/config
