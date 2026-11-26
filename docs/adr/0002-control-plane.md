@@ -21,7 +21,7 @@ operations. mDNS and manually entered addresses supply endpoint hints only.
 Desktop pairing adds an approval request alongside the CPace invitation flow.
 The requester commits to a random value with the two TLS fingerprints. The
 receiver generates its random value before the requester reveals its value.
-The apps display the same eight-digit comparison code derived from both
+The apps display the same four-digit comparison code derived from both
 values and the pinned identities. The receiver approves only after comparing
 the displays. The requester retrieves the result over the same TLS identity.
 Requests expire after two minutes and never persist as trusted peers before

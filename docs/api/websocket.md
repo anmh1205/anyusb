@@ -7,8 +7,8 @@ saved pin. Pairing is the only exception to the saved-pin requirement.
 
 ## Pairing
 
-The operator creates an eight-digit invitation on the host. It expires after
-two minutes or five start attempts. The client first gets the certificate from
+The operator creates a four-digit invitation on the host. It expires after
+two minutes or three start attempts. The client first gets the certificate from
 `GET /v1/pair/info`. Use the lowercase hex DER fingerprints of the client
 and server certificates as the respective CPace identities, with
 `anyusb-peer-pair-v1` as associated data. The implementation uses

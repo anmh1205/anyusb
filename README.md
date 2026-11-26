@@ -18,9 +18,10 @@ are generated in `dist/desktop/`.
    **Kết nối**. AnyUSB attaches the complete USB device to that computer. For a
    USB serial function, **Cổng trên máy này** shows its local COM or
    `/dev/tty*`. Debug probes, HID, storage and other devices instead show their
-   OS driver/binding state and remain usable without a COM port.
-   port once the driver has enumerated it.
-4. Select that port in your usual tool. In VS Code with ESP-IDF, run
+   OS driver/binding state and use their native driver without requiring a COM
+   port when that binding is ready.
+4. For a serial function, select that port in your usual tool. In VS Code with
+   ESP-IDF, run
    **ESP-IDF: Select Port to Use**, then flash or open the monitor in VS Code.
    In Arduino IDE, select the board and port and use **Upload** as usual.
    [ESP-IDF port selection](https://docs.espressif.com/projects/vscode-esp-idf-extension/en/latest/connectdevice.html) · [Arduino IDE port selection](https://docs.arduino.cc/software/ide-v2/tutorials/getting-started/ide-v2-uploading-a-sketch/)
@@ -64,8 +65,8 @@ sudo anyusb doctor
 
 Ubuntu needs USB/IP utilities and modules matching its running kernel. Debian
 uses the `usbip` package. The installer offers a separate loopback-restricted
-stock `usbipd` service, installs esptool 5.2.0 in a venv, and enables the agent.
-Add `--client-only` to skip the host module and daemon.
+stock `usbipd` service and enables the agent without requiring Python or
+external ESP tooling. Add `--client-only` to skip the host module and daemon.
 
 ## Install on Windows
 
@@ -77,9 +78,9 @@ Run an elevated PowerShell.
 ```
 
 The script previews the driver packages and prompts for consent before launching
-the signed upstream installers. Reboot if requested. For Remote ESP, install
-`scripts/esptool-requirements.txt` into a machine-wide Python environment under
-Program Files and pass its interpreter path with `-Python`. Use `-PeerSources`
+the signed upstream installers. Reboot if requested. Remote ESP operations use
+the built-in pure-Go bootloader and serial engine inside `anyusbd`, so no Python
+environment or `esptool` install is required. Use `-PeerSources`
 to enable an inbound Windows Firewall rule scoped to the intended peer addresses.
 
 ## Pair and share
@@ -100,10 +101,36 @@ LAN. Use the peer ID from `anyusb peers` and the device ID from the remote list.
 anyusb pair HOST CODE
 anyusb peers
 anyusb list --peer PEER
-anyusb connect --peer PEER DEVICE
+anyusb connect --peer PEER DEVICE --wait 30s
 anyusb list --connections
+anyusb diagnostics
+anyusb force-release --device DEVICE
 anyusb disconnect --connection CONNECTION
 ```
+
+`--wait 30s` waits for aggregate OS driver readiness before returning. Use
+`--wait-for attached` when a vendor-specific or unknown device only needs a
+confirmed native USB/IP import, or wait for an existing persistent connection
+with `anyusb wait --connection CONNECTION --for ready --timeout 30s`.
+
+`anyusb diagnostics` exports the current doctor checks, recent native-command
+results and managed-controller state as JSON. On the USB host,
+`force-release --device DEVICE` invalidates the active lease and briefly fences
+the same peer so a stuck client cannot immediately reacquire it.
+
+For development without USB hardware, start an isolated mock agent. For example,
+on Windows PowerShell:
+
+```powershell
+anyusbd -dev-scenario cdc-ncm -data "$env:LOCALAPPDATA\AnyUSB-Lab\ncm" -socket '\\.\pipe\anyusb-lab-ncm' -peer-listen 127.0.0.1:48543
+anyusb -socket '\\.\pipe\anyusb-lab-ncm' list
+```
+
+Use a second terminal for the CLI. On Linux, use a private directory you own
+and an absolute socket path under it. Pair two mock agents on distinct
+loopback ports to test the managed lifecycle. See the
+[mock scenario and diagnostic notes](docs/api/local-usb-model.md#recovery-and-diagnostics)
+for the available scenarios and failure cases.
 
 For a connected ST-Link, J-Link or CMSIS-DAP device, explicitly run the
 read-only native-tool enumeration probe when you want application-level
@@ -128,19 +155,21 @@ designated test network for stock-tool interoperability. The original raw
 `list --remote`, `share`, `connect HOST BUSID` and `disconnect VHCI_PORT`
 commands remain available for that workflow.
 
-Foreground options include `-socket`, `-data`, `-usbip`, `-usbipd`, `-python`,
-`-peer-listen`, `-advertise`, and `-backend`. `-advertise` accepts a MagicDNS
-name or host address for pairing in both directions. Local control uses a
-root-only Unix socket or administrator-only named pipe. Run `anyusb ui` and
-open the authorized loopback URL in a browser.
+Foreground options include `-socket`, `-data`, `-usbip`, `-usbipd`,
+`-peer-listen`, `-advertise`, `-usb-only`, and `-backend`. `-advertise` accepts
+a MagicDNS name or host address for pairing in both directions. Local control
+uses a root-only Unix socket or administrator-only named pipe. Run `anyusb ui`
+and open the authorized loopback URL in a browser.
 
 ## Remote ESP
 
-The following CLI workflow runs on agents that have been separately configured
-for host-side esptool. The desktop installers configure USB forwarding for IDEs.
+The following CLI workflow runs on agents started with Remote ESP enabled
+(default when `-usb-only` is not set), with no Python or external `esptool`
+installation required. The desktop installers configure USB forwarding for IDEs.
 
 Use a managed shared ESP device. Disconnect its USB/IP lease before starting
-an ESP operation. The host opens the serial port and runs the pinned esptool.
+an ESP operation. The host opens the serial port directly using AnyUSB's
+built-in ROM SLIP bootloader and serial engine.
 
 ```text
 anyusb chip-id PEER DEVICE

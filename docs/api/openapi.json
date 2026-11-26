@@ -389,7 +389,7 @@
     },
     "/v1/esp/{device}/jobs": {
       "post": {
-        "summary": "Start a host-local esptool job",
+        "summary": "Start a host-local ESP bootloader job",
         "operationId": "post_v1_esp_device_jobs",
         "responses": {
           "202": {
@@ -627,6 +627,9 @@
           "message"
         ],
         "properties": {
+          "code": {
+            "type": "string"
+          },
           "message": {
             "type": "string"
           }
@@ -749,6 +752,10 @@
           },
           "alternate": {
             "type": "integer"
+          },
+          "cdc_control_interface": {
+            "type": "integer",
+            "description": "CDC control interface owning this data interface in the same configuration"
           },
           "class": {
             "type": "string"

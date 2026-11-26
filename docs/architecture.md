@@ -28,7 +28,7 @@ flowchart LR
     R <-->|Lease-authorized binary WebSocket| H
     H <-->|USB/IP on loopback TCP 3240| S[Host USB/IP backend]
     T[Stock USB/IP client] -.->|Direct TCP 3240 on trusted lab network| S
-    H --> E[Local esptool and serial service]
+    H --> E[Built-in ESP bootloader and serial service]
     S --> U[Physical USB device]
     E --> U
 ```
@@ -133,19 +133,18 @@ at the same location. See the [identity ADR](adr/0003-device-identity.md) and
 The peer uploads an ESP-IDF `flasher_args.json` and its referenced BIN files, or
 an explicit list of offsets and firmware files. The host normalizes either input
 to a typed manifest. Validate allowed options, file sizes, paths, offsets and
-overlaps before invoking the tool. The job runs inside a per-request workspace
-using a version-pinned `python -m esptool` and streams sequenced stdout, stderr,
-and terminal status. Use `5.2.0` as the initial lab pin seen on the Windows host.
-Verify the version during service startup and expose a mismatch through `doctor`.
+overlaps before running the job. The job executes inside a per-request workspace
+using AnyUSB's built-in pure-Go ROM SLIP bootloader and serial engine (requiring
+no external Python or `esptool` installation) and streams sequenced stdout,
+stderr, and terminal status. `doctor` reports built-in ESP engine readiness.
 Use typed operations for chip identification, erase, write, verify, and reset.
-[esptool commands](https://docs.espressif.com/projects/esptool/en/latest/esp32s3/esptool/basic-commands.html)
+[Espressif ROM serial protocol reference](https://docs.espressif.com/projects/esptool/en/latest/esp32s3/esptool/basic-commands.html)
 
 The serial monitor uses a leased host-local port and a separate WebSocket for
 byte input/output, baud changes, and DTR/RTS state. Reset uses the selected
-board's host-local reset strategy. A native USB Serial/JTAG port allows esptool
-to recognize the device's VID/PID and select native USB behavior. Espressif
-documents a limitation for its RFC2217 and raw socket remote-port modes on
-native USB. [ESP32-S3 USB Serial/JTAG](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/usb-serial-jtag-console.html), [esptool remote serial limitations](https://docs.espressif.com/projects/esptool/en/latest/esp32s3/remote-serial-ports.html)
+board's host-local reset strategy. Native USB Serial/JTAG ports (`0x303A:0x1001`)
+use dedicated IO0/EN sequencing and watch-dog cleanup over USB CDC control
+lines, avoiding external remote-serial bottlenecks. [ESP32-S3 USB Serial/JTAG](https://docs.espressif.com/projects/esp-idf/en/stable/esp32s3/api-guides/usb-serial-jtag-console.html)
 
 ## Operator interfaces and deployment
 
@@ -154,7 +153,8 @@ request forgery protection. The local devices view presents sharing and lease
 status. The remote devices view presents connection, recovery and disconnect
 controls. It displays any COM or tty ports detected on the importing machine so
 local applications can use them directly. Desktop packages start the service
-with `-usb-only`. Separately configured agents can expose the ESP CLI workflows.
+with `-usb-only`. Full-mode agents expose the built-in ESP CLI workflows without
+external runtime setup.
 
 The CLI exposes `anyusb list`, `share`, `unshare`, `connect`, `disconnect`,
 `flash`, `monitor`, `reset`, and `doctor`. It calls the local agent so that the
