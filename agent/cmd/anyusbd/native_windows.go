@@ -23,9 +23,17 @@ func defaultSocket() string                               { return core.DefaultP
 func defaultData() string                                 { return filepath.Join(os.Getenv("ProgramData"), "AnyUSB", "state") }
 func nativeAdapter(opt options) (platform.Adapter, error) { return backend.New(opt.usbipd, opt.usbip) }
 
-func listenLocal(path string) (net.Listener, io.Closer, error) {
+func listenLocal(path string, development bool) (net.Listener, io.Closer, error) {
+	security := "D:P(A;;GA;;;SY)(A;;GA;;;BA)"
+	if development {
+		user, err := windows.GetCurrentProcessToken().GetTokenUser()
+		if err != nil {
+			return nil, nil, fmt.Errorf("read development user's Windows identity: %w", err)
+		}
+		security += "(A;;GA;;;" + user.User.Sid.String() + ")"
+	}
 	listener, err := winio.ListenPipe(path, &winio.PipeConfig{
-		SecurityDescriptor: "D:P(A;;GA;;;SY)(A;;GA;;;BA)", InputBufferSize: 65536, OutputBufferSize: 65536,
+		SecurityDescriptor: security, InputBufferSize: 65536, OutputBufferSize: 65536,
 	})
 	return listener, nil, err
 }
@@ -54,7 +62,12 @@ func listenDesktop(url string) (io.Closer, error) {
 	return listener, nil
 }
 
-func nativeRun(run func(context.Context) error) error {
+func nativeRun(development bool, run func(context.Context) error) error {
+	if development {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		return run(ctx)
+	}
 	service, err := svc.IsWindowsService()
 	if err != nil {
 		return err

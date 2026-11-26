@@ -55,7 +55,7 @@ func approvalCode(client, host, id string, clientNonce, hostNonce []byte) string
 	digest.Write([]byte("AnyUSB approval code v1\x00" + client + host + id))
 	digest.Write(clientNonce)
 	digest.Write(hostNonce)
-	return fmt.Sprintf("%08d", binary.BigEndian.Uint32(digest.Sum(nil))%100000000)
+	return fmt.Sprintf("%04d", binary.BigEndian.Uint32(digest.Sum(nil))%10000)
 }
 
 func (n *Node) approvalLocked(id string) (approval, bool) {

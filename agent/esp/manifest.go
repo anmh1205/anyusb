@@ -1,4 +1,4 @@
-// Package esp runs typed esptool operations on a host's physical serial port.
+// Package esp runs built-in ESP ROM bootloader and serial monitor operations on a host's physical serial port.
 package esp
 
 import (

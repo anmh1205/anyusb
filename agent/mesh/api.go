@@ -25,19 +25,26 @@ type pairRequest struct{ Endpoint, Code string }
 
 var requestIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{12,80}$`)
 
-func (n *Node) ConfigureESP(python string) { n.esp = esp.New(n.ctx, n.dir, python, n.BeginESP) }
+func (n *Node) ConfigureESP() { n.esp = esp.New(n.ctx, n.dir, n.BeginESP) }
 
 func (n *Node) ESPCheck() platform.Check {
 	if n.esp == nil {
-		return platform.Check{Name: "esptool", Detail: "ESP operations disabled"}
+		return platform.Check{Name: "esp", Detail: "ESP operations disabled"}
 	}
 	return n.esp.Doctor()
 }
 
+type localMeshInfo struct {
+	Peer
+	Addresses []string `json:"addresses,omitempty"`
+	Tailscale string   `json:"tailscale,omitempty"`
+}
+
 func (n *Node) LocalHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/mesh/info", output(func(*http.Request) (Peer, error) {
-		return Peer{ID: n.id, Name: n.name, Endpoint: n.address}, nil
+	mux.HandleFunc("GET /v1/mesh/info", output(func(r *http.Request) (localMeshInfo, error) {
+		addresses, tailscale := n.LocalNetworkInfo(r.Context())
+		return localMeshInfo{Peer: Peer{ID: n.id, Name: n.name, Endpoint: n.address}, Addresses: addresses, Tailscale: tailscale}, nil
 	}))
 	mux.HandleFunc("POST /v1/mesh/invite", output(func(*http.Request) (invite, error) { return n.newInvite() }))
 	mux.HandleFunc("POST /v1/mesh/pair", output(func(r *http.Request) (Peer, error) {
@@ -69,16 +76,15 @@ func (n *Node) LocalHandler() http.Handler {
 		if err := inputJSON(r, &input); err != nil {
 			return Peer{}, err
 		}
-		id := r.PathValue("peer")
 		endpoint, err := PeerEndpoint(input.Endpoint)
 		if err != nil {
 			return Peer{}, err
 		}
 		n.mu.Lock()
 		defer n.mu.Unlock()
-		peer, exists := n.config.Peers[id]
-		if !exists {
-			return Peer{}, platform.ErrNotFound
+		peer, err := n.resolvePeerLocked(r.PathValue("peer"))
+		if err != nil {
+			return Peer{}, err
 		}
 		peer.Endpoint = endpoint
 		return peer, n.addPeerLocked(peer)
@@ -87,6 +93,9 @@ func (n *Node) LocalHandler() http.Handler {
 	mux.HandleFunc("GET /v1/mesh/shares", output(func(r *http.Request) ([]SharedDevice, error) { return n.shared(r.Context()) }))
 	mux.HandleFunc("PUT /v1/mesh/shares/{device}", empty(func(r *http.Request) error { return n.setShared(r.Context(), r.PathValue("device"), true) }))
 	mux.HandleFunc("DELETE /v1/mesh/shares/{device}", empty(func(r *http.Request) error { return n.setShared(r.Context(), r.PathValue("device"), false) }))
+	mux.HandleFunc("POST /v1/mesh/shares/{device}/force-release", output(func(r *http.Request) (LeaseFence, error) {
+		return n.forceRelease(r.PathValue("device"))
+	}))
 	mux.HandleFunc("GET /v1/mesh/connections", output(func(*http.Request) ([]Connection, error) { return n.connectionViews(), nil }))
 	mux.HandleFunc("POST /v1/mesh/connections", output(func(r *http.Request) (Connection, error) {
 		var input struct {
@@ -279,9 +288,17 @@ func (n *Node) watchTrust(ctx context.Context, cancel context.CancelFunc, id str
 	}
 }
 
-func (n *Node) revoke(id string) error {
+func (n *Node) revoke(query string) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	resolved, err := n.resolvePeerLocked(query)
+	if err != nil {
+		if errors.Is(err, platform.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	id := resolved.ID
 	peer, ok := n.config.Peers[id]
 	if !ok {
 		return nil
@@ -330,12 +347,33 @@ func (n *Node) peers() []Peer {
 	return peers
 }
 
+func (n *Node) resolvePeerLocked(query string) (Peer, error) {
+	if peer, ok := n.config.Peers[query]; ok {
+		return peer, nil
+	}
+	var matches []Peer
+	lower := strings.ToLower(strings.TrimSpace(query))
+	for _, peer := range n.config.Peers {
+		if lower != "" && (strings.EqualFold(peer.Name, query) || (len(lower) >= 6 && strings.HasPrefix(strings.ToLower(peer.ID), lower))) {
+			matches = append(matches, peer)
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return Peer{}, fmt.Errorf("%w: peer %q", platform.ErrNotFound, query)
+	default:
+		return Peer{}, fmt.Errorf("%w: multiple peers match %q; use full peer ID", platform.ErrConflict, query)
+	}
+}
+
 func (n *Node) findPeer(id string) (Peer, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	peer, ok := n.config.Peers[id]
-	if !ok {
-		return Peer{}, fmt.Errorf("%w: peer %q", platform.ErrNotFound, id)
+	peer, err := n.resolvePeerLocked(id)
+	if err != nil {
+		return Peer{}, err
 	}
 	if peer.Endpoint == "" {
 		return Peer{}, fmt.Errorf("%w: set the peer address first", platform.ErrInvalid)
@@ -348,7 +386,9 @@ func (n *Node) connectionViews() []Connection {
 	defer n.mu.Unlock()
 	views := make([]Connection, 0, len(n.connections))
 	for _, conn := range n.connections {
-		views = append(views, conn.Connection)
+		view := conn.Connection
+		view.Stats = conn.statsSnapshot()
+		views = append(views, view)
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].ID < views[j].ID })
 	return views
@@ -387,6 +427,11 @@ func (n *Node) forward(upgrade bool, path func(*http.Request) string) http.Handl
 			return
 		}
 		defer res.Body.Close()
+		if res.StatusCode == http.StatusUnauthorized {
+			problem(w, httpFailure{Status: http.StatusBadGateway, Code: "peer_revoked",
+				Message: "Máy từ xa đã hủy ghép cặp hoặc chưa tin cậy máy này. Hãy ghép cặp lại."})
+			return
+		}
 		w.Header().Set("Content-Type", res.Header.Get("Content-Type"))
 		w.WriteHeader(res.StatusCode)
 		_, _ = io.Copy(w, res.Body)
@@ -535,7 +580,7 @@ func problem(w http.ResponseWriter, err error) {
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		status = http.StatusGatewayTimeout
 	}
-	jsonResponse(w, status, map[string]string{"message": err.Error()})
+	jsonResponse(w, status, map[string]string{"code": failureCode(err), "message": err.Error()})
 }
 
 func output[T any](operation func(*http.Request) (T, error)) http.HandlerFunc {

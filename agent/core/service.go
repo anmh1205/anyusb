@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -34,10 +36,19 @@ type ErrorResponse struct {
 }
 
 type Options struct {
-	Mesh     http.Handler
-	ESPCheck func() platform.Check
-	UIURL    string
-	RawShare func(context.Context, string, bool) (platform.Device, error)
+	Mesh        http.Handler
+	ESPCheck    func() platform.Check
+	Diagnostics func() any
+	UIURL       string
+	RawShare    func(context.Context, string, bool) (platform.Device, error)
+}
+
+type DiagnosticBundle struct {
+	GeneratedAt time.Time                    `json:"generated_at"`
+	Runtime     map[string]string            `json:"runtime"`
+	Checks      []platform.Check             `json:"checks"`
+	Commands    []platform.CommandDiagnostic `json:"native_commands"`
+	Details     any                          `json:"connection_diagnostics,omitempty"`
 }
 
 func Handler(adapter platform.Adapter, options Options) http.Handler {
@@ -90,7 +101,7 @@ func Handler(adapter platform.Adapter, options Options) http.Handler {
 		}
 		return struct{}{}, adapter.Detach(r.Context(), port)
 	})))
-	router.HandleFunc("GET /v1/doctor", respond(func(r *http.Request) ([]platform.Check, error) {
+	doctor := func(r *http.Request) []platform.Check {
 		checks := adapter.Doctor(r.Context())
 		imports, err := adapter.ListImports(r.Context())
 		checks = append(checks, platform.ImportBindingCheck(imports, err))
@@ -98,7 +109,30 @@ func Handler(adapter platform.Adapter, options Options) http.Handler {
 		if options.ESPCheck != nil {
 			checks = append(checks, options.ESPCheck())
 		}
-		return checks, nil
+		return checks
+	}
+	router.HandleFunc("GET /v1/doctor", respond(func(r *http.Request) ([]platform.Check, error) {
+		return doctor(r), nil
+	}))
+	router.HandleFunc("GET /v1/diagnostics", respond(func(r *http.Request) (DiagnosticBundle, error) {
+		var details any
+		if options.Diagnostics != nil {
+			details = options.Diagnostics()
+		}
+		versions := map[string]string{"go": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH}
+		if build, ok := debug.ReadBuildInfo(); ok {
+			versions["anyusb"] = build.Main.Version
+			for _, setting := range build.Settings {
+				if setting.Key == "vcs.revision" || setting.Key == "vcs.modified" {
+					versions[setting.Key] = setting.Value
+				}
+			}
+		}
+		return DiagnosticBundle{
+			GeneratedAt: time.Now().UTC(),
+			Runtime:     versions,
+			Checks:      doctor(r), Commands: platform.CommandDiagnostics(), Details: details,
+		}, nil
 	}))
 	router.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
 		streamEvents(w, r, adapter)

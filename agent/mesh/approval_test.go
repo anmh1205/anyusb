@@ -3,6 +3,7 @@ package mesh
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -22,7 +23,7 @@ func TestApprovalPairingAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(req.Code) != 8 || req.Status != "pending" {
+	if len(req.Code) != 4 || req.Status != "pending" {
 		t.Fatalf("outgoing request = %+v", req)
 	}
 	incoming := host.approvalsForUI(ctx)
@@ -62,5 +63,32 @@ func TestTailnetDiscoveryCandidates(t *testing.T) {
 	got := tailnetCandidates(status)
 	if len(got) != 2 || got[0].Endpoint != "100.94.74.49:47443" || got[1].Endpoint != "[fd7a:115c:a1e0::1234]:47443" {
 		t.Fatalf("candidates = %+v", got)
+	}
+}
+
+func TestDiscoveryPrefersTailscaleIPv4AndSyncsPeerMetadata(t *testing.T) {
+	peerID := strings.Repeat("b", 64)
+	node := &Node{
+		config: config{
+			Peers: map[string]Peer{
+				peerID: {ID: peerID, Name: "old-name", Endpoint: "192.168.1.99:47443"},
+			},
+			Shares:      make(map[string][]descriptor),
+			Connections: make(map[string]connectionIntent),
+			Fences:      make(map[string]LeaseFence),
+		},
+		dir: t.TempDir(),
+	}
+	results := node.devicesFromDiscovery([]Discovered{
+		{ID: peerID, Name: "ubuntu-host", Endpoint: "192.168.1.50:47443", Network: "LAN"},
+		{ID: peerID, Name: "ubuntu-host", Endpoint: "100.94.74.49:47443", Network: "Tailscale"},
+		{ID: peerID, Name: "ubuntu-host", Endpoint: "[fd7a:115c:a1e0::1234]:47443", Network: "Tailscale"},
+	})
+	if len(results) != 1 || results[0].Endpoint != "100.94.74.49:47443" || results[0].Network != "Tailscale" {
+		t.Fatalf("discovery priority = %+v", results)
+	}
+	saved := node.config.Peers[peerID]
+	if saved.Endpoint != "100.94.74.49:47443" || saved.Name != "ubuntu-host" {
+		t.Fatalf("synced peer = %+v", saved)
 	}
 }

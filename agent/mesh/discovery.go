@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anmh1205/anyusb/agent/platform"
 	"github.com/hashicorp/mdns"
 )
 
@@ -64,6 +65,80 @@ func lanInterfaces() ([]lanInterface, error) {
 		}
 	}
 	return result, nil
+}
+
+func lanInterfaceSignature(interfaces []lanInterface) string {
+	parts := make([]string, 0, len(interfaces))
+	for _, iface := range interfaces {
+		ips := make([]string, 0, len(iface.addresses))
+		for _, ip := range iface.addresses {
+			ips = append(ips, ip.String())
+		}
+		sort.Strings(ips)
+		parts = append(parts, fmt.Sprintf("%d:%s=%s", iface.device.Index, iface.device.Name, strings.Join(ips, ",")))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
+}
+
+// MaintainAdvertise keeps mDNS advertisements synced with active LAN interfaces
+// across boot races, Wi-Fi changes, and sleep/resume cycles.
+func (n *Node) MaintainAdvertise(ctx context.Context, port int) {
+	var stop func()
+	lastSig := ""
+	announcedUnavailable := false
+	refresh := func() {
+		interfaces, err := lanInterfaces()
+		sig := ""
+		if err == nil && len(interfaces) > 0 {
+			sig = lanInterfaceSignature(interfaces)
+		}
+		if sig == lastSig && (sig == "" || stop != nil) {
+			return
+		}
+		if stop != nil {
+			stop()
+			stop = nil
+		}
+		lastSig = sig
+		if sig == "" {
+			if !announcedUnavailable {
+				log.Printf("mDNS unavailable: waiting for a multicast LAN interface")
+				announcedUnavailable = true
+			}
+			return
+		}
+		nextStop, err := n.Advertise(port)
+		if err != nil {
+			if !announcedUnavailable {
+				log.Printf("mDNS unavailable: %v", err)
+				announcedUnavailable = true
+			}
+			lastSig = ""
+			return
+		}
+		stop = nextStop
+		if announcedUnavailable {
+			log.Printf("mDNS advertising restored")
+			announcedUnavailable = false
+		}
+	}
+	refresh()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	defer func() {
+		if stop != nil {
+			stop()
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			refresh()
+		}
+	}
 }
 
 func (n *Node) Advertise(port int) (func(), error) {
@@ -192,29 +267,103 @@ func tailnetCandidates(data []byte) []Discovered {
 	return endpoints[:min(len(endpoints), 128)]
 }
 
-func discoverTailnet(ctx context.Context) []Discovered {
+func tailscaleBinary() string {
 	path, _ := exec.LookPath("tailscale")
 	if path == "" && runtime.GOOS == "windows" {
 		for _, root := range []string{os.Getenv("ProgramW6432"), os.Getenv("ProgramFiles")} {
 			candidate := filepath.Join(root, "Tailscale", "tailscale.exe")
 			if filepath.IsAbs(candidate) {
 				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-					path = candidate
-					break
+					return candidate
 				}
 			}
 		}
 	}
+	return path
+}
+
+func discoverTailnet(ctx context.Context) []Discovered {
+	path := tailscaleBinary()
 	if !filepath.IsAbs(path) {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(ctx, 1700*time.Millisecond)
-	defer cancel()
-	data, err := exec.CommandContext(ctx, path, "status", "--json").Output()
+	result, err := (platform.OSNativeRunner{}).Run(ctx, platform.CommandRequest{
+		Tool: "tailscale status", Path: path, Args: []string{"status", "--json"}, Timeout: 1700 * time.Millisecond,
+		SensitiveOutput: true, SkipDiagnosticOnOK: true,
+	})
 	if err != nil {
 		return nil
 	}
-	return tailnetCandidates(data)
+	return tailnetCandidates([]byte(result.Stdout))
+}
+
+func (n *Node) LocalNetworkInfo(ctx context.Context) (addresses []string, tailscaleState string) {
+	seen := make(map[string]bool)
+	add := func(addr string) {
+		addr = strings.TrimSpace(addr)
+		if addr == "" || seen[addr] {
+			return
+		}
+		seen[addr] = true
+		addresses = append(addresses, addr)
+	}
+	if n.address != "" {
+		host, _, err := net.SplitHostPort(n.address)
+		if err == nil && host != "" {
+			add(host)
+		} else {
+			add(n.address)
+		}
+	}
+	tailscaleState = "missing"
+	if path := tailscaleBinary(); filepath.IsAbs(path) {
+		tailscaleState = "unavailable"
+		tctx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		res, err := (platform.OSNativeRunner{}).Run(tctx, platform.CommandRequest{
+			Tool: "tailscale status", Path: path, Args: []string{"status", "--json"}, Timeout: 1200 * time.Millisecond,
+			SensitiveOutput: true, SkipDiagnosticOnOK: true,
+		})
+		cancel()
+		if err == nil {
+			var status struct {
+				BackendState string
+				Self         struct {
+					DNSName      string
+					TailscaleIPs []netip.Addr
+				}
+			}
+			if json.Unmarshal([]byte(res.Stdout), &status) == nil {
+				if status.BackendState != "" {
+					tailscaleState = strings.ToLower(status.BackendState)
+				}
+				if status.BackendState == "Running" {
+					for _, ip := range status.Self.TailscaleIPs {
+						if tailnetV4.Contains(ip) {
+							add(ip.String())
+						}
+					}
+					if dns := strings.TrimSuffix(status.Self.DNSName, "."); dns != "" {
+						add(dns)
+					}
+					for _, ip := range status.Self.TailscaleIPs {
+						if tailnetV6.Contains(ip) {
+							add(ip.String())
+						}
+					}
+				}
+			}
+		}
+	}
+	if ifaces, err := lanInterfaces(); err == nil {
+		for _, iface := range ifaces {
+			for _, ip := range iface.addresses {
+				if ip.To4() != nil {
+					add(ip.String())
+				}
+			}
+		}
+	}
+	return addresses, tailscaleState
 }
 
 func onLocalSubnet(endpoint string, addresses []net.Addr) bool {
@@ -286,13 +435,54 @@ func (n *Node) discover(ctx context.Context) []Discovered {
 	return n.devicesFromDiscovery(result)
 }
 
+func discoveryPriority(item Discovered) int {
+	host, _, err := net.SplitHostPort(item.Endpoint)
+	if err != nil {
+		host = item.Endpoint
+	}
+	ip, parseErr := netip.ParseAddr(strings.Trim(host, "[]"))
+	switch item.Network {
+	case "Tailscale":
+		if parseErr == nil && ip.Is4() {
+			return 4
+		}
+		return 3
+	case "LAN":
+		return 2
+	default:
+		return 1
+	}
+}
+
+func classifyEndpointNetwork(endpoint string, localAddresses []net.Addr) string {
+	host, _, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		host = endpoint
+	}
+	if ip, parseErr := netip.ParseAddr(strings.Trim(host, "[]")); parseErr == nil {
+		unmapped := ip.Unmap()
+		if tailnetV4.Contains(unmapped) || tailnetV6.Contains(unmapped) {
+			return "Tailscale"
+		}
+	}
+	if onLocalSubnet(endpoint, localAddresses) {
+		return "LAN"
+	}
+	return "Saved"
+}
+
 func (n *Node) devicesFromDiscovery(results []Discovered) []Discovered {
+	addresses, _ := net.InterfaceAddrs()
 	unique := make(map[string]Discovered)
 	reachable := make(map[string]bool)
 	for _, item := range results {
 		if item.ID != "" {
 			reachable[item.ID+"/"+item.Endpoint] = true
-			if unique[item.ID].ID == "" || item.Network == "Tailscale" {
+			if item.Network == "Saved" {
+				item.Network = classifyEndpointNetwork(item.Endpoint, addresses)
+			}
+			current, exists := unique[item.ID]
+			if !exists || discoveryPriority(item) > discoveryPriority(current) {
 				unique[item.ID] = item
 			}
 		}
@@ -302,9 +492,19 @@ func (n *Node) devicesFromDiscovery(results []Discovered) []Discovered {
 	defer n.mu.Unlock()
 	for _, item := range unique {
 		devices = append(devices, item)
-		if peer, ok := n.config.Peers[item.ID]; ok && !reachable[peer.ID+"/"+peer.Endpoint] {
-			peer.Endpoint = item.Endpoint
-			_ = n.addPeerLocked(peer)
+		if peer, ok := n.config.Peers[item.ID]; ok {
+			changed := false
+			if !reachable[peer.ID+"/"+peer.Endpoint] && item.Endpoint != "" {
+				peer.Endpoint = item.Endpoint
+				changed = true
+			}
+			if item.Name != "" && peer.Name != item.Name {
+				peer.Name = item.Name
+				changed = true
+			}
+			if changed {
+				_ = n.addPeerLocked(peer)
+			}
 		}
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })

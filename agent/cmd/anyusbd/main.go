@@ -10,17 +10,22 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/anmh1205/anyusb/agent/core"
 	"github.com/anmh1205/anyusb/agent/mesh"
+	"github.com/anmh1205/anyusb/agent/platform"
+	platformmock "github.com/anmh1205/anyusb/agent/platform/mock"
 	"github.com/anmh1205/anyusb/web"
 )
 
 type options struct {
 	socket, data, usbip, usbipd, python string
 	peer, ui, advertise, backend, name  string
+	devScenario                         string
 	mdns, desktop, usbOnly              bool
 }
 
@@ -31,12 +36,13 @@ func main() {
 	flag.StringVar(&opt.data, "data", defaultData(), "private state directory")
 	flag.StringVar(&opt.usbip, "usbip", "", "absolute path to the USB/IP client CLI")
 	flag.StringVar(&opt.usbipd, "usbipd", "", "absolute path to usbipd-win (Windows)")
-	flag.StringVar(&opt.python, "python", "", "absolute path to Python with the pinned esptool")
+	flag.StringVar(&opt.python, "python", "", "deprecated; built-in ESP engine requires no Python runtime")
 	flag.StringVar(&opt.peer, "peer-listen", ":"+mesh.DefaultPeerPort, "HTTPS peer address; empty disables it")
 	flag.StringVar(&opt.ui, "ui-listen", "127.0.0.1:47440", "local web address; empty disables it")
 	flag.StringVar(&opt.advertise, "advertise", "", "peer address shared during pairing, such as a MagicDNS name")
 	flag.StringVar(&opt.backend, "backend", "127.0.0.1:3240", "loopback address of the stock USB/IP host backend")
 	flag.StringVar(&opt.name, "name", host, "name shown to other AnyUSB operators")
+	flag.StringVar(&opt.devScenario, "dev-scenario", "", "development-only mock USB scenario; never compatibility evidence")
 	flag.BoolVar(&opt.mdns, "mdns", true, "advertise on the local network")
 	flag.BoolVar(&opt.desktop, "desktop", false, "allow local interactive Windows users to open the desktop app")
 	flag.BoolVar(&opt.usbOnly, "usb-only", false, "serve USB forwarding without host-side ESP operations")
@@ -45,9 +51,43 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
-	if err := nativeRun(func(ctx context.Context) error { return run(ctx, opt) }); err != nil {
+	if opt.devScenario != "" {
+		configured := make(map[string]bool)
+		flag.Visit(func(value *flag.Flag) { configured[value.Name] = true })
+		if err := opt.isolateDevelopment(configured); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if err := nativeRun(opt.devScenario != "", func(ctx context.Context) error { return run(ctx, opt) }); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func (opt *options) isolateDevelopment(configured map[string]bool) error {
+	data, err := filepath.Abs(opt.data)
+	if err != nil {
+		return err
+	}
+	if !configured["data"] || !configured["socket"] || opt.socket == "" ||
+		strings.EqualFold(filepath.Clean(opt.socket), filepath.Clean(defaultSocket())) ||
+		strings.EqualFold(data, filepath.Clean(defaultData())) || opt.desktop {
+		return fmt.Errorf("a development scenario requires a separate -data directory and -socket, without -desktop")
+	}
+	opt.data = data
+	if !configured["peer-listen"] {
+		opt.peer = "127.0.0.1:0"
+	}
+	if opt.peer != "" {
+		host, _, err := net.SplitHostPort(opt.peer)
+		if err != nil || !net.ParseIP(host).IsLoopback() {
+			return fmt.Errorf("a development scenario requires a loopback -peer-listen address")
+		}
+	}
+	if !configured["ui-listen"] {
+		opt.ui = "127.0.0.1:0"
+	}
+	opt.mdns, opt.usbOnly = false, true
+	return nil
 }
 
 type listenerService struct {
@@ -58,11 +98,22 @@ type listenerService struct {
 func run(parent context.Context, opt options) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	adapter, err := nativeAdapter(opt)
-	if err != nil {
-		return err
+	var adapter platform.Adapter
+	if opt.devScenario != "" {
+		mockAdapter, err := platformmock.New(ctx, opt.devScenario)
+		if err != nil {
+			return err
+		}
+		adapter, opt.backend = mockAdapter, mockAdapter.BackendAddress()
+		log.Printf("WARNING: using development mock USB scenario %q; results are not hardware compatibility evidence", opt.devScenario)
+	} else {
+		var err error
+		adapter, err = nativeAdapter(opt)
+		if err != nil {
+			return err
+		}
 	}
-	local, lock, err := listenLocal(opt.socket)
+	local, lock, err := listenLocal(opt.socket, opt.devScenario != "")
 	if err != nil {
 		return err
 	}
@@ -74,13 +125,13 @@ func run(parent context.Context, opt options) error {
 	if err != nil {
 		return err
 	}
-	control := core.Options{Mesh: node.LocalHandler(), RawShare: node.RawShare}
+	control := core.Options{Mesh: node.LocalHandler(), RawShare: node.RawShare, Diagnostics: func() any { return node.Diagnostics() }}
 	if !opt.usbOnly {
-		node.ConfigureESP(opt.python)
-		control.ESPCheck = node.ESPCheck
-		if diagnostic := node.ESPCheck(); !diagnostic.OK {
-			log.Print(diagnostic.Detail)
+		if opt.python != "" {
+			log.Print("note: -python is deprecated; AnyUSB uses its built-in ESP bootloader and serial engine")
 		}
+		node.ConfigureESP()
+		control.ESPCheck = node.ESPCheck
 	}
 	newServer := func(listener net.Listener, handler http.Handler) listenerService {
 		return listenerService{listener, &http.Server{
@@ -130,12 +181,7 @@ func run(parent context.Context, opt options) error {
 		if opt.mdns {
 			_, rawPort, _ := net.SplitHostPort(peer.Addr().String())
 			port, _ := strconv.Atoi(rawPort)
-			stopAdvertising, err := node.Advertise(port)
-			if err != nil {
-				log.Printf("mDNS unavailable: %v", err)
-			} else {
-				defer stopAdvertising()
-			}
+			go node.MaintainAdvertise(ctx, port)
 		}
 	}
 	log.Printf("anyusbd listening on %s", opt.socket)

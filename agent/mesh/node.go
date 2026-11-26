@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -45,10 +46,14 @@ type connectionIntent struct {
 }
 
 type config struct {
+	Version     int                         `json:"version"`
 	Peers       map[string]Peer             `json:"peers"`
 	Shares      map[string][]descriptor     `json:"shares"`
 	Connections map[string]connectionIntent `json:"connections,omitempty"`
+	Fences      map[string]LeaseFence       `json:"lease_fences,omitempty"`
 }
+
+const currentStateVersion = 1
 
 type Node struct {
 	adapter platform.Adapter
@@ -61,18 +66,23 @@ type Node struct {
 	id      string
 	esp     *esp.Service
 
-	mu          sync.Mutex
-	clientMu    sync.Mutex
-	config      config
-	invite      invite
-	pending     map[string]pairSession
-	approvals   map[string]approval
-	leases      map[string]*lease
-	connections map[string]*connection
-	subscribers map[chan Event]struct{}
-	revision    uint64
-	epoch       string
-	inventory   map[string]platform.Device
+	mu           sync.Mutex
+	hostMu       sync.Mutex
+	clientMu     sync.Mutex
+	config       config
+	invite       invite
+	pending      map[string]pairSession
+	approvals    map[string]approval
+	leases       map[string]*lease
+	connections  map[string]*connection
+	subscribers  map[chan Event]struct{}
+	revision     uint64
+	epoch        string
+	inventory    map[string]platform.Device
+	clock        Clock
+	retryPolicy  RetryPolicy
+	generations  map[string]uint64
+	recentEvents []Event
 }
 
 func New(ctx context.Context, adapter platform.Adapter, dir, name, advertised, backend string) (*Node, error) {
@@ -98,12 +108,23 @@ func New(ctx context.Context, adapter platform.Adapter, dir, name, advertised, b
 		cert: cert, id: fingerprint(cert.Certificate[0]), epoch: randomID(),
 		pending: make(map[string]pairSession), approvals: make(map[string]approval), leases: make(map[string]*lease),
 		connections: make(map[string]*connection), subscribers: make(map[chan Event]struct{}),
-		inventory: make(map[string]platform.Device),
+		inventory: make(map[string]platform.Device), clock: realClock{}, retryPolicy: DefaultRetryPolicy(),
+		generations: make(map[string]uint64),
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	statePath := filepath.Join(dir, "state.json")
+	data, err := os.ReadFile(statePath)
+	migrated := false
 	if err == nil {
 		if err := json.Unmarshal(data, &n.config); err != nil {
-			return nil, fmt.Errorf("read AnyUSB peer store: %w", err)
+			backup, backupErr := preserveCorruptState(statePath, data)
+			if backupErr != nil {
+				return nil, fmt.Errorf("read AnyUSB peer store: %w; preserving corrupt state failed: %v", err, backupErr)
+			}
+			return nil, fmt.Errorf("read AnyUSB peer store: %w; corrupt state preserved at %s", err, backup)
+		}
+		migrated, err = migrateConfig(&n.config)
+		if err != nil {
+			return nil, err
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, err
@@ -117,6 +138,21 @@ func New(ctx context.Context, adapter platform.Adapter, dir, name, advertised, b
 	if n.config.Connections == nil {
 		n.config.Connections = make(map[string]connectionIntent)
 	}
+	if n.config.Fences == nil {
+		n.config.Fences = make(map[string]LeaseFence)
+	}
+	for _, fence := range n.config.Fences {
+		n.generations[fence.Device] = max(n.generations[fence.Device], fence.Generation)
+	}
+	if n.config.Version == 0 {
+		n.config.Version = currentStateVersion
+		migrated = true
+	}
+	if migrated {
+		if err := n.saveLocked(); err != nil {
+			return nil, fmt.Errorf("migrate AnyUSB peer store: %w", err)
+		}
+	}
 	go n.reconcileLoop()
 	n.restoreConnections()
 	return n, nil
@@ -127,11 +163,51 @@ func (n *Node) TLSConfig() *tls.Config {
 }
 
 func (n *Node) saveLocked() error {
+	n.config.Version = currentStateVersion
 	data, err := json.MarshalIndent(n.config, "", "  ")
 	if err != nil {
 		return err
 	}
 	return atomicWrite(filepath.Join(n.dir, "state.json"), data)
+}
+
+func migrateConfig(current *config) (bool, error) {
+	switch current.Version {
+	case 0:
+		current.Version = currentStateVersion
+		return true, nil
+	case currentStateVersion:
+		return false, nil
+	default:
+		return false, fmt.Errorf("AnyUSB peer store version %d is newer than supported version %d", current.Version, currentStateVersion)
+	}
+}
+
+func preserveCorruptState(path string, data []byte) (string, error) {
+	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
+	for attempt := 0; attempt < 100; attempt++ {
+		backup := fmt.Sprintf("%s.corrupt-%s-%02d", path, stamp, attempt)
+		file, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		_, writeErr := file.Write(data)
+		if writeErr == nil {
+			writeErr = file.Sync()
+		}
+		closeErr := file.Close()
+		if writeErr != nil {
+			return "", writeErr
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+		return backup, nil
+	}
+	return "", fmt.Errorf("could not allocate a unique corrupt-state backup")
 }
 
 func atomicWrite(path string, data []byte) error {

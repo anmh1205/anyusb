@@ -18,7 +18,7 @@ import (
 	"filippo.io/cpace"
 )
 
-var codePattern = regexp.MustCompile(`^[0-9]{8}$`)
+var codePattern = regexp.MustCompile(`^[0-9]{4}$`)
 
 type invite struct {
 	Code    string    `json:"code"`
@@ -50,13 +50,13 @@ type pairFinish struct {
 }
 
 func (n *Node) newInvite() (invite, error) {
-	number, err := rand.Int(rand.Reader, big.NewInt(100000000))
+	number, err := rand.Int(rand.Reader, big.NewInt(10000))
 	if err != nil {
 		return invite{}, err
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	n.invite = invite{Code: fmt.Sprintf("%08d", number), Expires: time.Now().Add(2 * time.Minute), tries: 5}
+	n.invite = invite{Code: fmt.Sprintf("%04d", number), Expires: time.Now().Add(2 * time.Minute), tries: 3}
 	clear(n.pending)
 	return n.invite, nil
 }
@@ -106,6 +106,10 @@ func (n *Node) finishPair(id string, input pairFinish) error {
 	}
 	delete(n.pending, input.Session)
 	if !hmac.Equal(input.Proof, proof(session.key, "client", input.Session)) {
+		if n.invite.tries == 0 {
+			n.invite = invite{}
+			clear(n.pending)
+		}
 		return failure(http.StatusForbidden, "pairing code did not match")
 	}
 	if err := n.addPeerLocked(session.peer); err != nil {
@@ -118,7 +122,7 @@ func (n *Node) finishPair(id string, input pairFinish) error {
 
 func (n *Node) pair(ctx context.Context, endpoint, code string) (Peer, error) {
 	if !codePattern.MatchString(code) {
-		return Peer{}, failure(http.StatusBadRequest, "pairing code must be eight digits")
+		return Peer{}, failure(http.StatusBadRequest, "pairing code must be four digits")
 	}
 	endpoint, err := PeerEndpoint(endpoint)
 	if err != nil {
@@ -174,12 +178,15 @@ func (n *Node) addPeerLocked(peer Peer) error {
 
 type httpFailure struct {
 	Status  int
+	Code    string
 	Message string
 }
 
 func (e httpFailure) Error() string { return e.Message }
 
-func failure(status int, message string) error { return httpFailure{status, message} }
+func (e httpFailure) FailureCode() string { return e.Code }
+
+func failure(status int, message string) error { return httpFailure{Status: status, Message: message} }
 
 func send(ctx context.Context, client *http.Client, method, endpoint string, body io.Reader, contentType string) (*http.Response, error) {
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, body)
@@ -197,11 +204,14 @@ func send(ctx context.Context, client *http.Client, method, endpoint string, bod
 		return res, nil
 	}
 	defer res.Body.Close()
-	var problem struct{ Message string }
+	var problem struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
 	if err := json.NewDecoder(io.LimitReader(res.Body, 8192)).Decode(&problem); err != nil || problem.Message == "" {
 		problem.Message = res.Status
 	}
-	return nil, failure(res.StatusCode, problem.Message)
+	return nil, httpFailure{Status: res.StatusCode, Code: problem.Code, Message: problem.Message}
 }
 
 func call[T any](ctx context.Context, client *http.Client, method, endpoint, path string, payload any) (T, error) {

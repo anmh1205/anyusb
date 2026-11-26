@@ -3,13 +3,9 @@ package esp
 import (
 	"context"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
-	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,60 +14,37 @@ import (
 	"github.com/anmh1205/anyusb/agent/platform"
 )
 
-const Version = "5.2.0"
-
-var versionPattern = regexp.MustCompile(`(?m)^5\.2\.0\s*$`)
-
 type Begin func(context.Context, string, string, string) (string, func(), error)
 
 type Service struct {
-	ctx         context.Context
-	python, dir string
-	versionErr  error
-	begin       Begin
-	mu          sync.Mutex
-	jobs        map[string]*Job
+	ctx    context.Context
+	dir    string
+	opener PortOpener
+	begin  Begin
+	mu     sync.Mutex
+	jobs   map[string]*Job
 }
 
-func New(ctx context.Context, dir, python string, begin Begin) *Service {
-	s := &Service{ctx: ctx, python: python, dir: dir, begin: begin, jobs: make(map[string]*Job)}
-	if s.python == "" {
-		for _, name := range []string{"python3", "python"} {
-			path, err := exec.LookPath(name)
-			if err != nil {
-				continue
-			}
-			s.python = path
-			if s.versionErr = s.checkVersion(ctx); s.versionErr == nil {
-				return s
-			}
-		}
-	}
-	s.versionErr = s.checkVersion(ctx)
-	return s
+// New creates a built-in pure-Go ESP service requiring no external Python or esptool runtime.
+func New(ctx context.Context, dir string, begin Begin) *Service {
+	return NewWithOpener(ctx, dir, openSerialPort, begin)
 }
 
-func (s *Service) checkVersion(ctx context.Context) error {
-	if s.python == "" || !filepath.IsAbs(s.python) {
-		return fmt.Errorf("set -python to the absolute path of a Python environment with esptool %s", Version)
+// NewWithOpener creates an ESP service using a custom serial port opener (for deterministic tests).
+func NewWithOpener(ctx context.Context, dir string, opener PortOpener, begin Begin) *Service {
+	if opener == nil {
+		opener = openSerialPort
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, s.python, "-m", "esptool", "version")
-	cmd.Env = pythonEnv()
-	out, err := cmd.CombinedOutput()
-	if err != nil || !versionPattern.Match(out) {
-		return fmt.Errorf("expected esptool %s in %s: %s", Version, s.python, strings.TrimSpace(string(out)))
-	}
-	return nil
+	return &Service{ctx: ctx, dir: dir, opener: opener, begin: begin, jobs: make(map[string]*Job)}
 }
 
 func (s *Service) Doctor() platform.Check {
-	check := platform.Check{Name: "esptool", OK: s.versionErr == nil, Detail: Version + " via " + s.python}
-	if s.versionErr != nil {
-		check.Detail = s.versionErr.Error()
+	return platform.Check{
+		Name:     "esp",
+		OK:       true,
+		Optional: true,
+		Detail:   "built-in Go ESP bootloader and serial engine",
 	}
-	return check
 }
 
 type JobState struct {
@@ -157,9 +130,6 @@ func (e InputError) Error() string { return e.Err.Error() }
 func (e InputError) Unwrap() error { return platform.ErrInvalid }
 
 func (s *Service) Start(w http.ResponseWriter, r *http.Request, owner, device, id string) (JobState, error) {
-	if s.versionErr != nil {
-		return JobState{}, fmt.Errorf("%w: %v", platform.ErrUnavailable, s.versionErr)
-	}
 	op := r.URL.Query().Get("op")
 	if !oneOf(op, []string{"chip-id", "erase", "flash", "verify", "reset"}) {
 		return JobState{}, fmt.Errorf("%w: unknown ESP operation %q", platform.ErrInvalid, op)
@@ -220,34 +190,19 @@ func (s *Service) Start(w http.ResponseWriter, r *http.Request, owner, device, i
 	if err != nil {
 		return JobState{}, err
 	}
-	args := []string{"-u", "-m", "esptool", "--port", port, "--baud", strconv.Itoa(baud)}
-	args = append(args, global...)
-	command := map[string]string{"chip-id": "read-mac", "erase": "erase-flash", "flash": "write-flash", "verify": "verify-flash", "reset": "flash-id"}
-	args = append(args, command[op])
-	if op == "flash" || op == "verify" {
-		args = append(args, flash...)
-		for _, file := range segments {
-			args = append(args, fmt.Sprintf("0x%x", file.Offset), file.Path)
-		}
-	}
 	state := JobState{ID: id, Device: device, Operation: op, Status: "running", Started: time.Now()}
 	job := &Job{owner: owner, state: state, update: make(chan struct{}), fingerprint: fingerprint}
 	s.jobs[id] = job
-	go s.runJob(job, args, dir, release)
+	go s.runJob(job, port, baud, op, manifest, segments, dir, release)
 	dir = ""
 	return state, nil
 }
 
-func (s *Service) runJob(job *Job, args []string, dir string, release func()) {
+func (s *Service) runJob(job *Job, port string, baud int, op string, manifest Manifest, segments []segment, dir string, release func()) {
 	defer os.RemoveAll(dir)
 	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, s.python, args...)
-	cmd.Dir = dir
-	cmd.Env = pythonEnv()
-	cmd.Stdout = logWriter{job, "stdout"}
-	cmd.Stderr = logWriter{job, "stderr"}
-	err := cmd.Run()
+	err := executeESPOperation(ctx, s.opener, port, baud, op, manifest, segments, logWriter{job, "stdout"}, logWriter{job, "stderr"})
 	release()
 	job.mu.Lock()
 	defer job.mu.Unlock()
@@ -255,10 +210,6 @@ func (s *Service) runJob(job *Job, args []string, dir string, release func()) {
 	job.state.Status = "succeeded"
 	if err != nil {
 		job.state.Status, job.state.Error, code = "failed", err.Error(), -1
-		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			code = exit.ExitCode()
-		}
 		if ctx.Err() != nil {
 			job.state.Error = ctx.Err().Error()
 		}
@@ -267,8 +218,8 @@ func (s *Service) runJob(job *Job, args []string, dir string, release func()) {
 	job.changed()
 }
 
-func pythonEnv() []string {
-	return append(os.Environ(), "PYTHONUNBUFFERED=1", "PYTHONNOUSERSITE=1", "NO_COLOR=1")
+func openReadOnly(path string) (*os.File, error) {
+	return os.Open(path)
 }
 
 func baudRate(value string) (int, error) {
@@ -280,4 +231,30 @@ func baudRate(value string) (int, error) {
 		return 0, fmt.Errorf("%w: baud rate must be between 300 and 4000000", platform.ErrInvalid)
 	}
 	return baud, nil
+}
+
+func parseJobConfig(manifest Manifest) (jobConfig, error) {
+	if _, _, err := options(manifest); err != nil {
+		return jobConfig{}, err
+	}
+	chip := strings.ToLower(strings.TrimSpace(manifest.Extra.Chip))
+	if chip == "" {
+		chip = "auto"
+	}
+	before := strings.ReplaceAll(strings.TrimSpace(manifest.Extra.Before), "_", "-")
+	if before == "" {
+		before = "default-reset"
+	}
+	after := strings.ReplaceAll(strings.TrimSpace(manifest.Extra.After), "_", "-")
+	if after == "" {
+		after = "hard-reset"
+	}
+	return jobConfig{
+		chip:      chip,
+		before:    before,
+		after:     after,
+		flashMode: strings.ToLower(strings.TrimSpace(manifest.FlashSettings["flash_mode"])),
+		flashFreq: strings.ToLower(strings.TrimSpace(manifest.FlashSettings["flash_freq"])),
+		flashSize: strings.TrimSpace(manifest.FlashSettings["flash_size"]),
+	}, nil
 }

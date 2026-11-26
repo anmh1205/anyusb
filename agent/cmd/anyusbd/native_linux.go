@@ -20,8 +20,8 @@ func listenDesktop(string) (io.Closer, error) {
 	return nil, fmt.Errorf("Linux desktop startup uses polkit")
 }
 
-func nativeRun(run func(context.Context) error) error {
-	if os.Geteuid() != 0 {
+func nativeRun(development bool, run func(context.Context) error) error {
+	if !development && os.Geteuid() != 0 {
 		return fmt.Errorf("anyusbd must run as root to manage USB/IP")
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-func listenLocal(path string) (net.Listener, io.Closer, error) {
+func listenLocal(path string, development bool) (net.Listener, io.Closer, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return nil, nil, fmt.Errorf("socket requires a clean, absolute path")
 	}
-	if err := ensureSocketDirectory(filepath.Dir(path)); err != nil {
+	if err := ensureSocketDirectory(filepath.Dir(path), development); err != nil {
 		return nil, nil, err
 	}
 	lock, err := os.OpenFile(path+".lock", os.O_WRONLY|os.O_CREATE|syscall.O_NOFOLLOW, 0600)
@@ -43,7 +43,7 @@ func listenLocal(path string) (net.Listener, io.Closer, error) {
 	return listener, lock, nil
 }
 
-func ensureSocketDirectory(path string) error {
+func ensureSocketDirectory(path string, development bool) error {
 	if err := os.MkdirAll(path, 0700); err != nil {
 		return fmt.Errorf("create socket directory: %w", err)
 	}
@@ -51,8 +51,14 @@ func ensureSocketDirectory(path string) error {
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode().Perm()&0077 != 0 || info.Sys().(*syscall.Stat_t).Uid != 0 {
-		return fmt.Errorf("%s must be a private root-owned directory (mode 0700)", path)
+	wantedOwner := uint32(0)
+	ownerDescription := "root-owned"
+	if development {
+		wantedOwner = uint32(os.Geteuid())
+		ownerDescription = "owned by the current development user"
+	}
+	if !info.IsDir() || info.Mode().Perm()&0077 != 0 || info.Sys().(*syscall.Stat_t).Uid != wantedOwner {
+		return fmt.Errorf("%s must be a private directory (mode 0700) %s", path, ownerDescription)
 	}
 	return nil
 }
