@@ -27,8 +27,10 @@ const usage = `Usage: anyusb [-socket PATH] [-json] COMMAND
   list [--remote HOST | --imports | --peer PEER | --connections | --shared]
   share [--managed] DEVICE_ID_OR_BUSID
   unshare [--managed] DEVICE_ID_OR_BUSID
-  connect HOST BUSID | connect --peer PEER DEVICE [--confirm-risk]
+  force-release --device DEVICE
+  connect HOST BUSID | connect --peer PEER DEVICE [--confirm-risk] [--wait DURATION] [--wait-for ready|attached]
   disconnect VHCI_PORT | disconnect --connection ID
+  wait --connection ID [--for ready|attached] [--timeout DURATION]
   watch [--peer PEER]
   discover | peers | pair invite | pair HOST CODE
   revoke PEER | peer-address PEER HOST
@@ -37,7 +39,8 @@ const usage = `Usage: anyusb [-socket PATH] [-json] COMMAND
   flash|verify PEER DEVICE [--port PORT] [--baud BAUD] (--idf FILE | OFFSET=FILE...)
   monitor PEER DEVICE [--port PORT] [--baud BAUD] [--dtr] [--rts]
   ui
-  doctor`
+  doctor
+  diagnostics`
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -135,6 +138,19 @@ func runCLI(ctx context.Context, args []string, output io.Writer) error {
 			}
 			return []string{check.Name, status, check.Detail}
 		})
+	case "diagnostics":
+		if len(args) != 0 {
+			return fmt.Errorf("usage: anyusb diagnostics")
+		}
+		bundle, err := call[core.DiagnosticBundle](ctx, c, http.MethodGet, "/v1/diagnostics", nil)
+		if err != nil {
+			return err
+		}
+		encoder := json.NewEncoder(output)
+		if !*jsonOutput {
+			encoder.SetIndent("", "  ")
+		}
+		return encoder.Encode(bundle)
 	case "watch":
 		if len(args) != 0 {
 			return fmt.Errorf("usage: anyusb watch")
