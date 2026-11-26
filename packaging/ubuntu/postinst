@@ -2,8 +2,11 @@
 set -eu
 
 if [ "${1:-}" = configure ]; then
-    modprobe usbip-host || echo 'AnyUSB: USB host driver not available in the running kernel.' >&2
-    modprobe vhci-hcd || echo 'AnyUSB: USB client driver not available in the running kernel.' >&2
+    if ! usbip version >/dev/null 2>&1; then
+        echo "AnyUSB: usbip tool not found for kernel $(uname -r). Run: sudo apt install linux-tools-$(uname -r)" >&2
+    fi
+    modprobe usbip-host || echo "AnyUSB: USB host driver not available for kernel $(uname -r). Try: sudo apt install linux-modules-extra-$(uname -r)" >&2
+    modprobe vhci-hcd || echo "AnyUSB: USB client driver not available for kernel $(uname -r). Try: sudo apt install linux-modules-extra-$(uname -r)" >&2
     deb-systemd-helper enable anyusb-usbipd.service anyusbd.service >/dev/null
     if [ -d /run/systemd/system ]; then
         systemctl daemon-reload

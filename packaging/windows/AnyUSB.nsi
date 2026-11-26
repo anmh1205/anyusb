@@ -12,8 +12,10 @@ ShowInstDetails show
 ShowUninstDetails show
 BrandingText "AnyUSB"
 
-!define MUI_WELCOMEPAGE_TEXT "AnyUSB sẽ cài dịch vụ, driver USB/IP và lối mở trong Start Menu. Windows có thể yêu cầu khởi động lại sau khi cài driver.$\r$\n$\r$\nBấm Tiếp theo để xem và bắt đầu cài."
-!define MUI_FINISHPAGE_TEXT "Mở AnyUSB từ Start Menu. Nếu Windows yêu cầu khởi động lại để hoàn tất driver, hãy khởi động lại trước khi kết nối USB."
+!define MUI_WELCOMEPAGE_TEXT "Trình cài đặt sẽ chuẩn bị đầy đủ để máy này vừa có thể chia sẻ USB vừa có thể nhận USB từ máy khác:$\r$\n$\r$\n• Dịch vụ nền AnyUSB, công cụ CLI và ứng dụng desktop.$\r$\n• Tải và xác minh chữ ký số cho driver USB/IP (usbipd-win và usbip-win2).$\r$\n• Mở tường lửa Windows cho mạng LAN và Tailscale (TCP 47443, UDP 5353).$\r$\n$\r$\nWindows có thể yêu cầu khởi động lại sau khi cài driver."
+!define MUI_FINISHPAGE_TEXT "AnyUSB đã sẵn sàng. Nếu Windows yêu cầu khởi động lại để hoàn tất driver USB/IP, hãy khởi động lại trước khi kết nối USB."
+!define MUI_FINISHPAGE_RUN "$INSTDIR\AnyUSB-Desktop.exe"
+!define MUI_FINISHPAGE_RUN_TEXT "Mở AnyUSB ngay"
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "${LICENSE}"
 !insertmacro MUI_PAGE_INSTFILES

@@ -5,18 +5,25 @@ param(
     [string] $Python,
     [string[]] $PeerSources = @(),
     [switch] $KeepStockUsbipRule,
-    [switch] $DesktopInstaller
+    [switch] $DesktopInstaller,
+    [switch] $Desktop,
+    [switch] $Upgrade
 )
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {}
 $build = (Resolve-Path -LiteralPath $BuildDirectory).Path
 foreach ($file in @('anyusbd.exe', 'anyusb.exe')) {
     if (!(Test-Path -LiteralPath (Join-Path $build $file) -PathType Leaf)) { throw "Missing $file" }
 }
 $existingService = Get-Service -Name anyusbd -ErrorAction SilentlyContinue
-if ($existingService -and !$DesktopInstaller) {
-    throw 'The anyusbd service already exists. Stop and remove it before using the manual installation script.'
+if ($existingService -and !$DesktopInstaller -and !$Upgrade) {
+    throw 'The anyusbd service already exists. Re-run with -Upgrade to replace it in place, or stop and remove it first.'
 }
 if ($existingService -and $existingService.Status -ne 'Stopped') {
+    Write-Host 'Stopping existing anyusbd service...'
     Stop-Service -Name anyusbd -Force
     (Get-Service -Name anyusbd).WaitForStatus('Stopped', [TimeSpan]::FromSeconds(15))
 }
@@ -38,13 +45,18 @@ foreach ($asset in $assets) {
     Write-Host "$($asset.Name) installs $($asset.Description)."
 }
 if (!$KeepStockUsbipRule) { Write-Host 'Disable the upstream inbound usbipd rule for managed mode.' }
-if ($PeerSources.Count -gt 0) { Write-Host "Allow inbound HTTPS peer traffic TCP 47443 from $($PeerSources -join ', ')." }
+if ($PeerSources.Count -gt 0) {
+    Write-Host "Allow inbound HTTPS peer traffic TCP 47443 from $($PeerSources -join ', ')."
+} else {
+    Write-Host 'Note: No -PeerSources specified; inbound TCP 47443 firewall rule will NOT be added.'
+}
 Write-Host 'Install the AnyUSB Windows service. Windows installers will display their own UI.'
 if (!$DesktopInstaller -and (Read-Host 'Type INSTALL to continue') -cne 'INSTALL') { return }
 
 $download = Join-Path $env:TEMP ('anyusb-install-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $download | Out-Null
 $restartNeeded = $false
+try {
 foreach ($asset in $assets) {
     $installed = Join-Path $env:ProgramFiles (Join-Path $asset.Folder $asset.Exe)
     if (Test-Path -LiteralPath $installed -PathType Leaf) {
@@ -55,13 +67,16 @@ foreach ($asset in $assets) {
         }
         Write-Host "Installing the validated release $($asset.Version) for $($asset.Exe)."
     }
+    Write-Host "Downloading $($asset.Name) from GitHub releases..."
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$($asset.Repo)/releases/tags/$($asset.Tag)"
     $metadata = $release.assets | Where-Object name -eq $asset.Name | Select-Object -First 1
     if (!$metadata -or $metadata.digest -notmatch '^sha256:[a-f0-9]{64}$') { throw "Missing release hash for $($asset.Name)" }
     $installer = Join-Path $download $asset.Name
     Invoke-WebRequest -UseBasicParsing -Uri $metadata.browser_download_url -OutFile $installer
+    Write-Host "Verifying SHA-256 and Authenticode signature for $($asset.Name)..."
     if (('sha256:' + (Get-FileHash -LiteralPath $installer).Hash) -ne $metadata.digest -or
         (Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'Valid') { throw "Signature or hash check failed for $installer" }
+    Write-Host "Installing $($asset.Name)..."
     if ($installer.EndsWith('.msi')) {
         $switches = if ($DesktopInstaller) { '/qn /norestart' } else { '/norestart' }
         $result = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList "/i `"$installer`" $switches" -Wait -PassThru
@@ -75,13 +90,16 @@ foreach ($asset in $assets) {
         Write-Host 'Reboot Windows before using the USB/IP driver.'
     }
 }
+} finally {
+    Remove-Item -LiteralPath $download -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 if (!$KeepStockUsbipRule) {
     Get-NetFirewallRule -DisplayName usbipd -ErrorAction SilentlyContinue | Disable-NetFirewallRule
 }
 if ($PeerSources.Count -gt 0) {
     $old = Get-NetFirewallRule -Name 'AnyUSB-Peer' -ErrorAction SilentlyContinue
-    if ($old -and !$DesktopInstaller) { throw 'An AnyUSB-Peer firewall rule already exists. Review the existing scope.' }
+    if ($old -and !$DesktopInstaller -and !$Upgrade) { throw 'An AnyUSB-Peer firewall rule already exists. Review the existing scope.' }
     if (!$old) {
         New-NetFirewallRule -Name 'AnyUSB-Peer' -DisplayName 'AnyUSB peer HTTPS' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 47443 -RemoteAddress $PeerSources | Out-Null
     } else {
@@ -104,21 +122,17 @@ if ($build.TrimEnd('\') -ne $destination.TrimEnd('\')) {
 }
 $binary = '"' + (Join-Path $destination 'anyusbd.exe') + '"'
 if ($DesktopInstaller) {
+    $binary += ' -desktop -usb-only'
+} elseif ($Desktop) {
     $binary += ' -desktop'
-    if (!$Python) { $binary += ' -usb-only' }
+}
+if ($DesktopInstaller -or $Desktop) {
     if (!(Get-NetFirewallRule -Name 'AnyUSB-LAN-Discovery' -ErrorAction SilentlyContinue)) {
         New-NetFirewallRule -Name 'AnyUSB-LAN-Discovery' -DisplayName 'AnyUSB LAN discovery' -Direction Inbound -Action Allow -Protocol UDP -LocalPort 5353 -RemoteAddress LocalSubnet -Program (Join-Path $destination 'anyusbd.exe') | Out-Null
     }
 }
 if ($Python) {
-    $pythonPath = (Resolve-Path -LiteralPath $Python).Path
-    $machineDir = [IO.Path]::GetFullPath($env:ProgramFiles) + '\'
-    if (!$pythonPath.StartsWith($machineDir, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Supply a machine-wide Python environment under Program Files for use by the system service.'
-    }
-    $version = & $pythonPath -m esptool version
-    if ($LASTEXITCODE -ne 0 -or $version -notcontains '5.2.0') { throw 'The selected Python does not have esptool 5.2.0.' }
-    $binary += ' -python "' + $pythonPath + '"'
+    Write-Warning '-Python is deprecated and no longer required; AnyUSB includes a built-in ESP engine.'
 }
 if ($existingService) {
     & "$env:SystemRoot\System32\sc.exe" config anyusbd 'binPath=' $binary 'start=' 'auto' | Out-Host
@@ -126,6 +140,7 @@ if ($existingService) {
 } else {
     New-Service -Name anyusbd -DisplayName 'AnyUSB Agent' -BinaryPathName $binary -StartupType Automatic | Out-Null
 }
+& "$env:SystemRoot\System32\sc.exe" failure anyusbd reset= 86400 actions= restart/2000/restart/5000/restart/10000 | Out-Null
 Start-Service -Name anyusbd
 & (Join-Path $destination 'anyusb.exe') doctor
 if ($DesktopInstaller -and $restartNeeded) { exit 3010 }
