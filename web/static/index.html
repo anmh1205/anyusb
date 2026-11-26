@@ -10,29 +10,157 @@
 </head>
 <body>
   <aside class="sidebar" aria-label="Máy tính">
-    <header class="brand"><span class="mark" aria-hidden="true">A</span><div><strong>AnyUSB</strong><span id="agent">Đang mở…</span></div></header>
-    <nav><button id="this-machine" class="nav-device active" type="button">Máy này</button></nav>
+    <header class="brand">
+      <span class="mark" aria-hidden="true">A</span>
+      <div class="brand-text">
+        <strong>AnyUSB</strong>
+        <span id="agent">Đang mở…</span>
+        <span id="agent-net" class="agent-net" hidden></span>
+      </div>
+    </header>
+
+    <nav>
+      <button id="this-machine" class="nav-device active" type="button">
+        <span>Máy này</span>
+        <small id="local-badge" class="nav-badge"></small>
+      </button>
+    </nav>
+
     <div class="side-heading"><h2>Máy đã ghép cặp</h2></div>
     <nav id="peers" aria-label="Máy đã ghép cặp"></nav>
-    <div class="side-heading"><h2>Máy tìm thấy</h2><button id="discover" class="subtle" type="button">Quét lại</button></div>
+
+    <div class="side-heading">
+      <h2>Máy tìm thấy</h2>
+      <button id="discover" class="subtle" type="button">Quét lại</button>
+    </div>
     <nav id="discoveries" aria-label="Máy tìm thấy"></nav>
     <p id="scan" class="small"></p>
-    <details class="manual"><summary>Ghép cặp bằng địa chỉ</summary>
-      <form id="pair">
-        <label>IP hoặc tên máy <input name="endpoint" required autocomplete="off"></label>
-        <label>Mã mời <input name="code" required pattern="[0-9]{8}" inputmode="numeric" maxlength="8"></label>
-        <button type="submit">Ghép cặp</button><button id="invite" type="button">Tạo mã mời</button>
-      </form>
-      <p id="invite-code"></p>
+
+    <details class="manual" id="manual-pair">
+      <summary>Ghép cặp bằng địa chỉ</summary>
+      <div class="manual-box">
+        <div class="manual-group">
+          <p class="manual-title">Nhận kết nối từ máy khác</p>
+          <div id="self-addresses" class="self-addresses"></div>
+          <button id="invite" type="button">Tạo mã mời 4 số</button>
+          <p id="invite-code"></p>
+        </div>
+        <form id="pair" class="manual-group">
+          <p class="manual-title">Nhập mã từ máy khác</p>
+          <label>IP hoặc tên máy <input name="endpoint" placeholder="vd: 192.168.1.15 hoặc 100.x.x.x" required autocomplete="off"></label>
+          <label>Mã mời 4 số <input name="code" placeholder="4 chữ số" required pattern="[0-9]{4}" inputmode="numeric" maxlength="4"></label>
+          <button type="submit" class="primary">Ghép cặp</button>
+        </form>
+      </div>
     </details>
+
+    <div class="sidebar-footer">
+      <button id="toggle-guide" class="subtle" type="button">Hướng dẫn nhanh</button>
+    </div>
   </aside>
+
   <main>
-    <header class="page-head"><div><h1 id="page-title">Thiết bị USB</h1><p id="page-detail"></p></div><button id="refresh" type="button">Làm mới</button></header>
-    <p id="notice" role="status" hidden></p>
-    <section id="pairing" hidden aria-label="Yêu cầu ghép cặp"><h2>Yêu cầu ghép cặp</h2><div id="requests"></div></section>
-    <section id="local-section" aria-label="Thiết bị cắm vào máy này"><div id="local" class="devices" aria-live="polite"></div></section>
-    <section id="remote-section" hidden aria-label="Thiết bị trên máy đã ghép cặp"><div id="remote" class="devices" aria-live="polite"></div></section>
-    <details class="diagnostics"><summary>Chẩn đoán</summary><button type="button" id="doctor">Kiểm tra dịch vụ và driver</button><ul id="checks"></ul></details>
+    <header class="page-head">
+      <div>
+        <h1 id="page-title">Thiết bị USB</h1>
+        <p id="page-detail"></p>
+      </div>
+      <div class="head-actions">
+        <button id="refresh" type="button">Làm mới</button>
+      </div>
+    </header>
+
+    <div id="notice" role="status" hidden>
+      <span id="notice-text"></span>
+      <button id="notice-close" class="notice-close" type="button" aria-label="Đóng thông báo">×</button>
+    </div>
+
+    <section id="health-banner" class="health-banner" hidden aria-label="Cảnh báo hệ thống">
+      <div>
+        <strong id="health-title">Cần kiểm tra dịch vụ hoặc driver</strong>
+        <ul id="health-list"></ul>
+      </div>
+      <button id="health-recheck" type="button">Kiểm tra lại</button>
+    </section>
+
+    <section id="onboarding" class="onboarding" hidden aria-label="Hướng dẫn sử dụng">
+      <div class="onboarding-head">
+        <div>
+          <h2>Bắt đầu với AnyUSB (cả 2 phía)</h2>
+          <p>Cài AnyUSB trên cả hai máy, kết nối cùng mạng LAN hoặc bật sẵn Tailscale.</p>
+        </div>
+        <button id="hide-guide" class="subtle" type="button">Ẩn hướng dẫn</button>
+      </div>
+      <div class="steps-grid">
+        <article class="step-card">
+          <span class="step-num">1</span>
+          <div>
+            <h3>Ghép cặp hai máy</h3>
+            <p>Chọn máy kia ở <strong>Máy tìm thấy</strong> bên trái, đối chiếu mã 4 số trùng nhau rồi bấm đồng ý (hoặc dùng <strong>Ghép cặp bằng địa chỉ</strong>).</p>
+          </div>
+        </article>
+        <article class="step-card">
+          <span class="step-num">2</span>
+          <div>
+            <h3>Máy cắm cáp USB</h3>
+            <p>Chọn <strong>Máy này</strong> và bấm <strong>Cho phép dùng</strong> trên thiết bị muốn chia sẻ cho máy kia.</p>
+          </div>
+        </article>
+        <article class="step-card">
+          <span class="step-num">3</span>
+          <div>
+            <h3>Máy lập trình / sử dụng</h3>
+            <p>Chọn tên máy cắm USB ở <strong>Máy đã ghép cặp</strong>, bấm <strong>Kết nối</strong> rồi dùng cổng COM / tty hoặc driver gốc.</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="pairing" hidden aria-label="Yêu cầu ghép cặp">
+      <h2>Yêu cầu ghép cặp</h2>
+      <div id="requests"></div>
+    </section>
+
+    <section id="local-section" aria-label="Thiết bị cắm vào máy này">
+      <div id="active-outgoing" class="outgoing-summary" hidden></div>
+      <div id="local" class="devices" aria-live="polite"></div>
+      <div id="local-absent-wrap" hidden>
+        <h2 class="sub-heading">Đã chia sẻ nhưng đang rút cáp</h2>
+        <div id="local-absent" class="devices"></div>
+      </div>
+    </section>
+
+    <section id="remote-section" hidden aria-label="Thiết bị trên máy đã ghép cặp">
+      <div id="peer-bar" class="peer-bar" hidden>
+        <div class="peer-meta">
+          <span id="peer-status-pill" class="pill"></span>
+          <code id="peer-endpoint"></code>
+        </div>
+        <div class="peer-actions">
+          <button id="peer-edit-toggle" type="button">Đổi địa chỉ</button>
+          <button id="peer-revoke" class="danger" type="button">Hủy ghép cặp</button>
+        </div>
+      </div>
+      <form id="peer-edit-form" class="peer-edit-form" hidden>
+        <label>Địa chỉ mới (IP, tên máy hoặc host:port)
+          <input id="peer-endpoint-input" name="endpoint" required autocomplete="off">
+        </label>
+        <div class="actions">
+          <button type="submit" class="primary">Lưu địa chỉ</button>
+          <button id="peer-edit-cancel" type="button">Hủy</button>
+        </div>
+      </form>
+      <div id="remote" class="devices" aria-live="polite"></div>
+    </section>
+
+    <details class="diagnostics">
+      <summary>Chẩn đoán &amp; bảo trì</summary>
+      <div class="diag-actions">
+        <button type="button" id="doctor">Kiểm tra dịch vụ và driver</button>
+        <button type="button" id="diagnostics">Xuất gói chẩn đoán</button>
+      </div>
+      <ul id="checks"></ul>
+    </details>
   </main>
 </body>
 </html>

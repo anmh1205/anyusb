@@ -10,6 +10,7 @@ const execute = promisify(execFile);
 const startupPage = pathToFileURL(path.join(__dirname, "startup.html")).href;
 let window;
 let dashboardOrigin = "";
+let retryTimer = null;
 app.setName("AnyUSB");
 
 function dashboardURL(value) {
@@ -21,9 +22,17 @@ function dashboardURL(value) {
   return url;
 }
 
-async function openDashboard() {
+function clearRetryTimer() {
+  if (retryTimer) {
+    clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+async function openDashboard(autoRetries = 4) {
   const target = window;
   if (!target || target.isDestroyed()) return;
+  clearRetryTimer();
   dashboardOrigin = "";
   const [file, args] = process.platform === "win32"
     ? [path.join(path.dirname(process.execPath), "anyusb.exe"), ["desktop-url"]]
@@ -36,12 +45,31 @@ async function openDashboard() {
     await target.loadURL(url.href);
   } catch {
     dashboardOrigin = "";
-    if (!target.isDestroyed()) await target.loadURL(startupPage);
+    if (!target.isDestroyed()) {
+      if (target.webContents.getURL() !== startupPage) {
+        await target.loadURL(startupPage);
+      }
+      if (autoRetries > 0) {
+        retryTimer = setTimeout(() => { void openDashboard(autoRetries - 1); }, 2000);
+      }
+    }
   }
 }
 
 function isMainFrame(event) {
   return window && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame;
+}
+
+function canInvokeRetry(event) {
+  if (!isMainFrame(event)) return false;
+  const senderURL = event.senderFrame?.url || "";
+  if (senderURL === startupPage) return true;
+  if (!dashboardOrigin) return false;
+  try {
+    return new URL(senderURL).origin === dashboardOrigin;
+  } catch {
+    return false;
+  }
 }
 
 function createWindow() {
@@ -56,8 +84,8 @@ function createWindow() {
     if (target !== startupPage && target !== dashboardOrigin + "/") event.preventDefault();
   });
   window.webContents.on("will-redirect", event => event.preventDefault());
-  window.on("closed", () => { window = null; });
-  void openDashboard();
+  window.on("closed", () => { clearRetryTimer(); window = null; });
+  void openDashboard(4);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -71,7 +99,7 @@ if (!app.requestSingleInstanceLock()) {
     session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
     ipcMain.handle("anyusb:retry", event => {
-      if (isMainFrame(event) && event.senderFrame.url === startupPage) void openDashboard();
+      if (canInvokeRetry(event)) void openDashboard(2);
     });
     createWindow();
   });

@@ -51,6 +51,7 @@ func (u *UI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		token = r.URL.Query().Get("token")
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(u.token)) != 1 {
+		w.Header().Set("X-AnyUSB-Local-Auth", "required")
 		http.Error(w, "run anyusb ui for the authorized URL", http.StatusUnauthorized)
 		return
 	}

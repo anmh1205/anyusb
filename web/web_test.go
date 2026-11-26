@@ -33,6 +33,9 @@ func TestLoopbackAuthorization(t *testing.T) {
 		if recorder.Code != sc.want {
 			t.Errorf("%s: status %d expected %d", sc.path, recorder.Code, sc.want)
 		}
+		if sc.want == http.StatusUnauthorized && recorder.Header().Get("X-AnyUSB-Local-Auth") != "required" {
+			t.Errorf("%s: missing X-AnyUSB-Local-Auth header", sc.path)
+		}
 		if sc.path == "/" && !strings.Contains(recorder.Body.String(), "<title>AnyUSB</title>") {
 			t.Error("missing embedded UI")
 		}
@@ -57,6 +60,12 @@ func TestDesktopUIOnlyOffersNativeUSBForwarding(t *testing.T) {
 	for _, required := range []string{
 		"cổng trên máy này", "usb đã được gắn vào hệ điều hành", "thiết bị này không cần com/tty", "liên kết hệ điều hành",
 		"driver_missing", "confirm_risk", "showemulist usb", "stm32cubeprogrammer", "pyocd", "tự nối lại",
+		"next_retry_at", "last_failure", "upload_bytes", "last_progress", "lease_age_ms", "binding.driver", "cdc-data",
+		"xác nhận và kết nối",
+		"force-release", "buộc nhả", "60 giây",
+		"xuất gói chẩn đoán", "/v1/diagnostics",
+		"(!shared && blocked)", `device.share_policy === "block"`,
+		"hủy ghép cặp", "đổi địa chỉ", "bắt đầu với anyusb", "cần kiểm tra dịch vụ hoặc driver",
 	} {
 		if !strings.Contains(page, required) {
 			t.Fatalf("desktop UI is missing native forwarding guidance %q", required)

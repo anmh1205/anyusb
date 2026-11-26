@@ -1,3 +1,5 @@
 body{margin:0;display:grid;place-items:center;min-height:100vh;background:#faf9f6;color:#172733;font:15px/1.55 system-ui,sans-serif}
-main{max-width:440px;padding:25px}h1{font-size:32px;letter-spacing:-.045em;margin:0 0 10px}p{color:#52636d}
-button{border:0;border-radius:8px;background:#145d61;color:white;font:inherit;font-weight:700;padding:9px 15px;cursor:pointer}
+main{max-width:460px;padding:28px;background:#fff;border:1px solid #dce2e3;border-radius:14px;box-shadow:0 2px 12px #18313a0a}
+h1{font-size:32px;letter-spacing:-.045em;margin:0 0 10px}p{color:#354752;margin:0 0 10px}p.hint{color:#52636d;font-size:13px;margin-bottom:18px}
+button{border:0;border-radius:8px;background:#145d61;color:white;font:inherit;font-weight:700;padding:10px 16px;cursor:pointer}
+button:hover{background:#0b494c}
