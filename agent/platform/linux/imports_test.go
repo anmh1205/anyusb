@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -50,11 +51,99 @@ func TestUSBFunctionsParseCompositeDescriptors(t *testing.T) {
 		}
 		functions = append(functions, readUSBFunction(dir, fixture.name))
 	}
+	functions = platform.EnrichDevice(platform.Device{Functions: functions}).Functions
 	if len(functions) != 3 || functions[0].Kind != "vendor" || functions[1].Kind != "hid" || functions[2].Kind != "storage" {
 		t.Fatalf("composite functions = %+v", functions)
 	}
 	if functions[2].Configuration != 1 || functions[2].Interface != 10 {
 		t.Fatalf("hex interface descriptor = %+v", functions[2])
+	}
+}
+
+func TestCDCControlsPrefersExplicitUnionOverIAD(t *testing.T) {
+	descriptors := []byte{
+		9, 2, 0, 0, 4, 1, 0, 0, 0,
+		8, 0x0b, 0, 4, 2, 0x0d, 0, 0,
+		9, 4, 2, 0, 1, 2, 2, 0, 0,
+		5, 0x24, 6, 2, 3,
+		9, 2, 0, 0, 2, 2, 0, 0, 0,
+		8, 0x0b, 4, 2, 2, 0x0d, 0, 0,
+		9, 4, // truncated descriptor
+	}
+	controls := cdcControls(descriptors)
+	if key := [2]int{1, 3}; controls[key] != 2 {
+		t.Fatalf("Union ownership for %v = %v", key, controls)
+	}
+	if key := [2]int{2, 5}; controls[key] != 4 {
+		t.Fatalf("IAD ownership for %v = %v", key, controls)
+	}
+}
+
+func TestUSBFunctionsAssociateNCMControlAndData(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows filenames cannot represent Linux sysfs interface names containing a colon")
+	}
+	root := t.TempDir()
+	devices := filepath.Join(root, "bus", "usb", "devices")
+	physical := filepath.Join(devices, "3-1")
+	for _, fixture := range []struct {
+		name, number, class, subclass string
+	}{
+		{"3-1:1.0", "00", "02", "0d"},
+		{"3-1:1.1", "01", "0a", "00"},
+	} {
+		dir := filepath.Join(physical, fixture.name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(dir, filepath.Join(devices, fixture.name)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("/sys/bus/usb/drivers/cdc_ncm", filepath.Join(dir, "driver")); err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range map[string]string{
+			"bConfigurationValue": "1", "bInterfaceNumber": fixture.number,
+			"bAlternateSetting": "00", "bInterfaceClass": fixture.class,
+			"bInterfaceSubClass": fixture.subclass, "bInterfaceProtocol": "00",
+		} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte(value+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	adapter := &Adapter{sysRoot: root}
+	functions := adapter.usbFunctions("3-1")
+	if len(functions) != 2 || functions[0].Kind != "network" || functions[1].Kind != "network" {
+		t.Fatalf("NCM functions = %+v", functions)
+	}
+	netInterface := filepath.Join(root, "class", "net", "usb0")
+	if err := os.MkdirAll(netInterface, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(physical, "3-1:1.0"), filepath.Join(netInterface, "device")); err != nil {
+		t.Fatal(err)
+	}
+	imported := platform.FinalizeImport(platform.Import{Functions: functions, Bindings: adapter.localBindings("3-1", functions)})
+	if imported.Readiness != "ready" || len(imported.Bindings) != 1 ||
+		imported.Bindings[0].ID != "usb0" || imported.Bindings[0].Driver != "cdc_ncm" {
+		t.Fatalf("NCM control/data pair and network binding = %+v", imported)
+	}
+}
+
+func TestLocalBindingWaitsForDeviceNode(t *testing.T) {
+	node := filepath.Join(t.TempDir(), "ttyACM0")
+	if got := localBindingStatus("serial", node); got != "enumerating" {
+		t.Fatalf("missing device node status = %q", got)
+	}
+	if err := os.WriteFile(node, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := localBindingStatus("serial", node); got != "ready" {
+		t.Fatalf("present device node status = %q", got)
+	}
+	if got := localBindingStatus("network", "eth-test"); got != "ready" {
+		t.Fatalf("network binding status = %q", got)
 	}
 }
 

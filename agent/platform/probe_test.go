@@ -48,6 +48,14 @@ func TestContainsIdentifierNormalizesSeparators(t *testing.T) {
 	if !containsIdentifier("Probe S/N: 00-25-AB-CD", "0025abcd") {
 		t.Fatal("probe serial was not matched")
 	}
+	for _, output := range []string{"Probe S/N: X0025ABCD", "Probe S/N: 0025ABCD9", "unrelated output"} {
+		if containsIdentifier(output, "0025abcd") {
+			t.Fatalf("probe serial matched non-exact output %q", output)
+		}
+	}
+	if containsIdentifier("Probe S/N: 123", "---") {
+		t.Fatal("separator-only serial matched probe output")
+	}
 }
 
 func TestMissingProfileToolIsStructuredAndOptional(t *testing.T) {
@@ -77,14 +85,16 @@ func TestProfileProbesRunReadOnlyNativeCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	extension := ""
+	jlink := "JLinkExe"
 	if runtime.GOOS == "windows" {
 		extension = ".exe"
+		jlink = "JLink.exe"
 	}
 	for _, test := range []struct {
 		profile, name string
 	}{
 		{"stlink", "STM32_Programmer_CLI" + extension},
-		{"jlink", "JLink" + extension},
+		{"jlink", jlink},
 		{"cmsis-dap", "pyocd" + extension},
 	} {
 		t.Run(test.profile, func(t *testing.T) {

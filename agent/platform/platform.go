@@ -41,6 +41,7 @@ type USBFunction struct {
 	Configuration int    `json:"configuration,omitempty"`
 	Interface     int    `json:"interface,omitempty"`
 	Alternate     int    `json:"alternate,omitempty"`
+	CDCControl    *int   `json:"cdc_control_interface,omitempty"`
 	Class         string `json:"class,omitempty"`
 	SubClass      string `json:"subclass,omitempty"`
 	Protocol      string `json:"protocol,omitempty"`

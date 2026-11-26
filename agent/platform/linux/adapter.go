@@ -2,9 +2,7 @@
 package linux
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +20,7 @@ type Adapter struct {
 	sysRoot string
 	devRoot string
 	hostID  string
+	runner  platform.NativeRunner
 }
 
 var _ platform.Adapter = (*Adapter)(nil)
@@ -38,7 +37,7 @@ func New(usbipPath string) (*Adapter, error) {
 	if identity == "" || identity == "uninitialized" {
 		return nil, fmt.Errorf("/etc/machine-id is not initialized")
 	}
-	return &Adapter{usbip: usbipPath, sysRoot: "/sys", devRoot: "/dev", hostID: identity}, nil
+	return &Adapter{usbip: usbipPath, sysRoot: "/sys", devRoot: "/dev", hostID: identity, runner: platform.OSNativeRunner{}}, nil
 }
 
 func (a *Adapter) binary(name string) (string, error) {
@@ -57,29 +56,16 @@ func (a *Adapter) run(ctx context.Context, tool string, args ...string) (string,
 	if err != nil {
 		return "", err
 	}
-	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, binary, args...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.Output()
-	if err == nil {
-		return string(stdout), nil
+	runner := a.runner
+	if runner == nil {
+		runner = platform.OSNativeRunner{}
 	}
-	detail := strings.TrimSpace(stderr.String())
-	if detail == "" {
-		detail = strings.TrimSpace(string(stdout))
+	result, err := runner.Run(ctx, platform.CommandRequest{
+		Tool: tool, Path: binary, Args: args, Environment: []string{"LC_ALL=C"}, Timeout: commandTimeout,
+		SensitiveOutput: len(args) != 1 || (args[0] != "version" && args[0] != "--version"),
+	})
+	if err != nil {
+		return "", err
 	}
-	command := tool + " " + args[0]
-	if ctx.Err() != nil {
-		return "", fmt.Errorf("%s: %w", command, ctx.Err())
-	}
-	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrPermission) {
-		return "", fmt.Errorf("%w: %s: %v", platform.ErrUnavailable, command, err)
-	}
-	if detail == "" {
-		return "", fmt.Errorf("%s: %w", command, err)
-	}
-	return "", fmt.Errorf("%s: %w: %s", command, err, detail)
+	return result.Stdout, nil
 }

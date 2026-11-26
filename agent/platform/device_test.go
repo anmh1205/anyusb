@@ -15,11 +15,14 @@ func TestEnrichDeviceProfilesAndPolicies(t *testing.T) {
 		share     string
 		reconnect string
 	}{
-		{"serial", Device{Functions: []USBFunction{{Class: "02"}, {Class: "0a"}}}, "serial", "", ShareAllow, ReconnectAutomatic},
+		{"serial", Device{Functions: []USBFunction{{Configuration: 1, Interface: 0, Class: "02", SubClass: "02"}, {Configuration: 1, Interface: 1, Class: "0a"}}}, "serial", "", ShareAllow, ReconnectAutomatic},
+		{"network NCM", Device{Functions: []USBFunction{{Configuration: 1, Interface: 0, Class: "02", SubClass: "0d"}, {Configuration: 1, Interface: 1, Class: "0a"}}}, "network", "network", ShareConfirm, ReconnectConfirmed},
 		{"storage", Device{Functions: []USBFunction{{Class: "08"}}}, "storage", "storage", ShareConfirm, ReconnectConfirmed},
 		{"hid", Device{Functions: []USBFunction{{Class: "03"}}}, "hid", "input", ShareConfirm, ReconnectConfirmed},
 		{"hub", Device{DeviceClass: "09"}, "hub", "topology", ShareBlock, ReconnectConfirmed},
 		{"named hub", Device{Product: "Generic USB Hub"}, "hub", "topology", ShareBlock, ReconnectConfirmed},
+		{"hub with storage", Device{Functions: []USBFunction{{Class: "09"}, {Class: "08"}}}, "hub", "topology", ShareBlock, ReconnectConfirmed},
+		{"hub with network", Device{Functions: []USBFunction{{Class: "09"}, {Class: "e0"}}}, "hub", "topology", ShareBlock, ReconnectConfirmed},
 		{"stlink", Device{VendorID: "0483", ProductID: "374b", Product: "ST-LINK/V2.1"}, "stlink", "", ShareAllow, ReconnectAutomatic},
 		{"jlink", Device{VendorID: "1366", ProductID: "0105", Product: "J-Link"}, "jlink", "", ShareAllow, ReconnectAutomatic},
 		{"unknown", Device{DeviceClass: "00"}, "unknown", "", ShareAllow, ReconnectAutomatic},

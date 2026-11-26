@@ -158,20 +158,28 @@ func (a *Adapter) usbFunctions(busID string) []platform.USBFunction {
 		return nil
 	}
 	var functions []platform.USBFunction
+	descriptors, _ := os.ReadFile(filepath.Join(directory, busID, "descriptors"))
+	controls := cdcControls(descriptors)
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Name(), busID+":") {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name())
-		functions = append(functions, readUSBFunction(path, entry.Name()))
+		function := readUSBFunction(path, entry.Name())
+		if control, ok := controls[[2]int{function.Configuration, function.Interface}]; ok && function.Class == "0a" {
+			function.CDCControl = &control
+		}
+		functions = append(functions, function)
 	}
 	return platform.EnrichDevice(platform.Device{Functions: functions}).Functions
 }
 
 func readUSBFunction(path, id string) platform.USBFunction {
 	driver, _ := os.Readlink(filepath.Join(path, "driver"))
+	_, interfacePath, _ := strings.Cut(id, ":")
+	configuration, _, _ := strings.Cut(interfacePath, ".")
 	function := platform.USBFunction{
-		ID: id, Configuration: platform.ParseDecimalAttribute(readAttribute(path, "bConfigurationValue")),
+		ID: id, Configuration: platform.ParseDecimalAttribute(configuration),
 		Interface: platform.ParseHexAttribute(readAttribute(path, "bInterfaceNumber")),
 		Alternate: platform.ParseHexAttribute(readAttribute(path, "bAlternateSetting")),
 		Class:     readAttribute(path, "bInterfaceClass"), SubClass: readAttribute(path, "bInterfaceSubClass"),
@@ -181,5 +189,50 @@ func readUSBFunction(path, id string) platform.USBFunction {
 	if function.Driver == "." {
 		function.Driver = ""
 	}
-	return platform.EnrichDevice(platform.Device{Functions: []platform.USBFunction{function}}).Functions[0]
+	return function
+}
+
+// cdcControls resolves data interface ownership from IADs and CDC Union
+// descriptors. A Union names its members explicitly and takes precedence.
+func cdcControls(descriptors []byte) map[[2]int]int {
+	controls := make(map[[2]int]int)
+	unions := make(map[[2]int]int)
+	var configuration, cdcInterface int
+	cdcInterface = -1
+	for len(descriptors) >= 2 {
+		length := int(descriptors[0])
+		if length < 2 || length > len(descriptors) {
+			break
+		}
+		current := descriptors[:length]
+		descriptors = descriptors[length:]
+		switch current[1] {
+		case 0x02: // configuration descriptor
+			if length >= 9 {
+				configuration, cdcInterface = int(current[5]), -1
+			}
+		case 0x04: // interface descriptor
+			cdcInterface = -1
+			if length >= 9 && current[5] == 0x02 {
+				cdcInterface = int(current[2])
+			}
+		case 0x0b: // interface association descriptor
+			if length >= 8 {
+				first, count := int(current[2]), int(current[3])
+				for number := first + 1; number < min(first+count, 256); number++ {
+					controls[[2]int{configuration, number}] = first
+				}
+			}
+		case 0x24: // class-specific interface descriptor
+			if length >= 5 && current[2] == 0x06 && int(current[3]) == cdcInterface {
+				for _, member := range current[4:] {
+					unions[[2]int{configuration, int(member)}] = cdcInterface
+				}
+			}
+		}
+	}
+	for member, control := range unions {
+		controls[member] = control
+	}
+	return controls
 }

@@ -2,7 +2,6 @@
 package windows
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -14,7 +13,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/anmh1205/anyusb/agent/platform"
@@ -27,6 +25,8 @@ var _ platform.Adapter = (*Adapter)(nil)
 var hardwareID = regexp.MustCompile(`(?i)^USB\\VID_([0-9a-f]{4})&PID_([0-9a-f]{4})`)
 var comPattern = regexp.MustCompile(`(?i)\bCOM[0-9]+\b`)
 var importedID = regexp.MustCompile(`(?i)\(([0-9a-f]{4}):([0-9a-f]{4})\)$`)
+var usbClassID = regexp.MustCompile(`(?i)^USB\\Class_([0-9a-f]{2})(?:&SubClass_([0-9a-f]{2})(?:&Prot_([0-9a-f]{2}))?)?$`)
+var usbInterfaceID = regexp.MustCompile(`(?i)&MI_([0-9a-f]{2})\\`)
 
 func New(host, client string) (*Adapter, error) {
 	for _, path := range []string{host, client} {
@@ -62,29 +62,22 @@ func resolve(override, file, directory string) string {
 	return path
 }
 
-func run(ctx context.Context, tool, path string, input []byte, args ...string) (string, error) {
+func runWithOptions(ctx context.Context, tool, path string, input []byte, skipOK bool, args ...string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("%w: install %s or set its executable path", platform.ErrUnavailable, tool)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	cmd.Stdin = bytes.NewReader(input)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	output, err := cmd.Output()
-	if ctx.Err() != nil {
-		return "", fmt.Errorf("%s: %w", tool, ctx.Err())
-	}
+	result, err := (platform.OSNativeRunner{}).Run(ctx, platform.CommandRequest{
+		Tool: tool, Path: path, Input: input, Args: args, Timeout: 15 * time.Second,
+		SensitiveOutput: len(args) != 1 || args[0] != "--version", SkipDiagnosticOnOK: skipOK,
+	})
 	if err != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = strings.TrimSpace(string(output))
-		}
-		return "", fmt.Errorf("%s %s: %w: %s", tool, args[0], err, detail)
+		return "", err
 	}
-	return strings.TrimPrefix(string(output), "\ufeff"), nil
+	return strings.TrimPrefix(result.Stdout, "\ufeff"), nil
+}
+
+func run(ctx context.Context, tool, path string, input []byte, args ...string) (string, error) {
+	return runWithOptions(ctx, tool, path, input, false, args...)
 }
 
 type deviceState struct {
@@ -97,64 +90,112 @@ type pnpDevice struct {
 	Status, Problem                         string
 	Virtual                                 bool
 	VirtualPort                             int
+	CompatibleIDs                           []string
+	NetworkName                             string
 }
 
 const pnpScript = `
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $ids = [Console]::In.ReadToEnd() | ConvertFrom-Json
-$all = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue)
+$all = @(Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object {
+    $id = [string]$_.InstanceId
+    $id -match '^(ROOT\\USB(IP_WIN2)?\\|USB\\|USBSTOR\\|HID\\|FTDIBUS\\|SERENUM\\|SCSI\\|SWD\\|STORAGE\\|VOLUME\\)' -or
+        $ids -contains $id
+})
 $parents = @{}
+$propertyData = @{}
+function Read-Properties([string[]] $instanceIds, [string[]] $keys) {
+	$instanceIds = @($instanceIds | Where-Object { $_ })
+    if (!$instanceIds.Count) { return }
+    foreach ($id in $instanceIds) {
+        foreach ($key in $keys) { $propertyData[$id + '|' + $key] = $null }
+    }
+    foreach ($property in @(Get-PnpDeviceProperty -InstanceId $instanceIds -KeyName $keys -ErrorAction SilentlyContinue)) {
+        $propertyData[[string]$property.InstanceId + '|' + [string]$property.KeyName] = $property.Data
+    }
+}
+Read-Properties @($all.InstanceId) @('DEVPKEY_Device_Parent')
+foreach ($dev in $all) {
+    if ($dev.PSObject.Properties['Service']) {
+        $propertyData[[string]$dev.InstanceId + '|DEVPKEY_Device_Service'] = $dev.Service
+    }
+}
 function Get-PropertyData([string] $id, [string] $key) {
     if ([string]::IsNullOrEmpty($id)) { return '' }
-    return (Get-PnpDeviceProperty -InstanceId $id -KeyName $key -ErrorAction SilentlyContinue).Data
+    $lookup = $id + '|' + $key
+    if (!$propertyData.ContainsKey($lookup)) {
+        $propertyData[$lookup] = (Get-PnpDeviceProperty -InstanceId $id -KeyName $key -ErrorAction SilentlyContinue).Data
+    }
+    return $propertyData[$lookup]
 }
 function Get-Parent([string] $id) {
     if (!$parents.ContainsKey($id)) { $parents[$id] = [string](Get-PropertyData $id 'DEVPKEY_Device_Parent') }
     return [string]$parents[$id]
 }
+$virtualCache = @{}
 function Test-Win2Ancestry([string] $id) {
+    if ($virtualCache.ContainsKey($id)) { return $virtualCache[$id] }
+    $first = $id
+    $virtual = $false
     for ($i = 0; $id -and $i -lt 12; $i++) {
-        if ($id.StartsWith('ROOT\USBIP_WIN2\', [StringComparison]::OrdinalIgnoreCase)) { return $true }
+        if ($virtualCache.ContainsKey($id)) { $virtual = $virtualCache[$id]; break }
+        if ($id -match '^(PCI|ACPI|HTREE)\\') { break }
+        if ($id.StartsWith('ROOT\USBIP_WIN2\', [StringComparison]::OrdinalIgnoreCase) -or
+            [string](Get-PropertyData $id 'DEVPKEY_Device_Service') -ieq 'usbip2_ude') { $virtual = $true; break }
         $id = Get-Parent $id
     }
-    return $false
+    $virtualCache[$first] = $virtual
+    return $virtual
 }
 function Test-RequestedAncestry([string] $id) {
+    if (!$ids.Count) { return $false }
     for ($i = 0; $id -and $i -lt 12; $i++) {
         foreach ($root in $ids) { if ($id -eq [string]$root) { return $true } }
+        if ($id -match '^(PCI|ACPI|HTREE)\\') { break }
         $id = Get-Parent $id
     }
     return $false
 }
+$portByRoot = @{}
 function Get-Win2Port([string] $id) {
     for ($i = 0; $id -and $i -lt 12; $i++) {
         $parent = Get-Parent $id
         if ($parent.StartsWith('USB\ROOT_HUB', [StringComparison]::OrdinalIgnoreCase) -and (Test-Win2Ancestry $parent)) {
-            $value = Get-PropertyData $id 'DEVPKEY_Device_Address'
-            $number = 0
-            if ([int]::TryParse([string]$value, [ref]$number) -and $number -gt 0) { return $number }
-            return 0
+            if (!$portByRoot.ContainsKey($id)) {
+                $value = (Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_Address' -ErrorAction SilentlyContinue).Data
+                $number = 0
+                if (![int]::TryParse([string]$value, [ref]$number)) { $number = 0 }
+                $portByRoot[$id] = $number
+            }
+            return $portByRoot[$id]
         }
         $id = $parent
     }
     return 0
 }
 function New-Device([string] $id, $dev) {
-    $paths = Get-PropertyData $id 'DEVPKEY_Device_LocationPaths'
+    $paths = $null
+    if ($ids -contains $id) { $paths = Get-PropertyData $id 'DEVPKEY_Device_LocationPaths' }
     $virtual = Test-Win2Ancestry $id
     $port = ''
     $friendly = [string]$dev.FriendlyName
+    $compatible = $dev.CompatibleID
+    if (!$dev.PSObject.Properties['CompatibleID']) { $compatible = Get-PropertyData $id 'DEVPKEY_Device_CompatibleIds' }
+    $problem = $dev.ConfigManagerErrorCode
+    if (!$dev.PSObject.Properties['ConfigManagerErrorCode']) { $problem = Get-PropertyData $id 'DEVPKEY_Device_ProblemCode' }
     if ($friendly -match '\((COM\d+)\)') { $port = $Matches[1] }
     [pscustomobject]@{
         InstanceID=$id; Parent=$(Get-Parent $id); Location=[string](@($paths | Sort-Object)[0]); Port=$port
-        Class=[string]$dev.Class; ClassGUID=[string](Get-PropertyData $id 'DEVPKEY_Device_ClassGuid')
+        Class=[string]$dev.Class; ClassGUID=[string]$dev.ClassGuid
         FriendlyName=$friendly; Service=[string](Get-PropertyData $id 'DEVPKEY_Device_Service')
-        Status=[string]$dev.Status; Problem=[string](Get-PropertyData $id 'DEVPKEY_Device_ProblemCode')
+        Status=[string]$dev.Status; Problem=[string]$problem
+        CompatibleIDs=@($compatible | Where-Object { $_ })
+        NetworkName=[string]$networkNames[$id]
         Virtual=$virtual; VirtualPort=$(if ($virtual) { Get-Win2Port $id } else { 0 })
     }
 }
-$result = @(
+$targets = @(
     $seen = @{}
     foreach ($rawId in $ids) {
         $id = [string]$rawId
@@ -162,23 +203,31 @@ $result = @(
         $dev = $all | Where-Object InstanceId -EQ $id | Select-Object -First 1
         if (!$dev) { $dev = [pscustomobject]@{InstanceId=$id; FriendlyName=''; Class=''; Status=''} }
         $seen[$id] = $true
-        New-Device $id $dev
+        $dev
     }
     foreach ($dev in $all) {
         $id = [string]$dev.InstanceId
         if ([string]::IsNullOrEmpty($id) -or $seen.ContainsKey($id)) { continue }
         if ((Test-Win2Ancestry $id) -or (Test-RequestedAncestry $id)) {
             $seen[$id] = $true
-            New-Device $id $dev
+            $dev
         }
     }
 )
+Read-Properties @($ids) @('DEVPKEY_Device_LocationPaths')
+$networkNames = @{}
+if ($targets.Class -contains 'Net') {
+    foreach ($nic in @(Get-CimInstance Win32_NetworkAdapter -Filter "PNPDeviceID LIKE 'USB%'" -ErrorAction SilentlyContinue)) {
+        if ($nic.PNPDeviceID -and $nic.NetConnectionID) { $networkNames[[string]$nic.PNPDeviceID] = [string]$nic.NetConnectionID }
+    }
+}
+$result = @(foreach ($dev in $targets) { New-Device ([string]$dev.InstanceId) $dev })
 ConvertTo-Json -InputObject $result -Compress`
 
 func pnp(ctx context.Context, ids []string) ([]pnpDevice, error) {
 	data, _ := json.Marshal(ids)
 	path := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-	out, err := run(ctx, "PowerShell PnP", path, data, "-NoProfile", "-NonInteractive", "-Command", pnpScript)
+	out, err := runWithOptions(ctx, "PowerShell PnP", path, data, true, "-NoProfile", "-NonInteractive", "-Command", pnpScript)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +237,7 @@ func pnp(ctx context.Context, ids []string) ([]pnpDevice, error) {
 }
 
 func (a *Adapter) readState(ctx context.Context) ([]deviceState, error) {
-	out, err := run(ctx, "usbipd-win", a.host, nil, "state")
+	out, err := runWithOptions(ctx, "usbipd-win", a.host, nil, true, "state")
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +428,7 @@ func (a *Adapter) Attach(ctx context.Context, endpoint, busID string) (platform.
 }
 
 func (a *Adapter) ListImports(ctx context.Context) ([]platform.Import, error) {
-	out, err := run(ctx, "usbip-win2", a.client, nil, "port")
+	out, err := runWithOptions(ctx, "usbip-win2", a.client, nil, true, "port")
 	if err != nil {
 		return nil, err
 	}
@@ -411,27 +460,20 @@ func mapImportBindings(imports []platform.Import, devices []pnpDevice) {
 	for i := range imports {
 		for _, device := range devices {
 			if device.Virtual && device.VirtualPort == imports[i].Port {
-				kind := pnpKind(device)
+				function := pnpFunction(device)
+				kind := function.Kind
 				identifier := device.InstanceID
 				if device.Port != "" {
 					identifier, kind = device.Port, "serial"
+				} else if kind == "network" && device.NetworkName != "" {
+					identifier = device.NetworkName
 				}
-				status, problem := "ready", strings.TrimSpace(device.Problem)
-				if device.Status != "" && !strings.EqualFold(device.Status, "OK") {
-					status = "error"
-					if problem == "" {
-						problem = device.Status
-					}
-				} else if device.Service == "" && device.Port == "" && expectsWindowsDriver(kind) {
-					status = "driver_missing"
-				}
+				status, problem := windowsBindingStatus(device, kind)
 				imports[i].Bindings = append(imports[i].Bindings, platform.LocalBinding{
 					Function: device.InstanceID, Kind: kind, ID: identifier, Driver: device.Service, Status: status, Problem: problem,
 				})
 				if device.InstanceID != "" {
-					imports[i].Functions = append(imports[i].Functions, platform.USBFunction{
-						ID: device.InstanceID, Kind: kind, Driver: device.Service, Description: device.FriendlyName,
-					})
+					imports[i].Functions = append(imports[i].Functions, function)
 				}
 			}
 		}
@@ -440,17 +482,64 @@ func mapImportBindings(imports []platform.Import, devices []pnpDevice) {
 			if ids != nil {
 				key := strings.ToLower(ids[1] + ":" + ids[2])
 				if matches[key] == 1 {
+					var candidate *pnpDevice
 					for _, device := range devices {
 						vidpid := hardwareID.FindStringSubmatch(device.InstanceID)
-						if device.Virtual && device.Port != "" && len(vidpid) == 3 && strings.EqualFold(vidpid[1]+":"+vidpid[2], key) {
-							imports[i].Bindings = append(imports[i].Bindings, platform.LocalBinding{Function: device.InstanceID,
-								Kind: "serial", ID: device.Port, Driver: device.Service, Status: "ready"})
+						if device.Virtual && device.VirtualPort == 0 && device.Port != "" && len(vidpid) == 3 &&
+							strings.EqualFold(vidpid[1]+":"+vidpid[2], key) {
+							if candidate != nil {
+								candidate = nil
+								break
+							}
+							copy := device
+							candidate = &copy
 						}
+					}
+					if candidate != nil {
+						status, problem := windowsBindingStatus(*candidate, "serial")
+						imports[i].Bindings = append(imports[i].Bindings, platform.LocalBinding{Function: candidate.InstanceID,
+							Kind: "serial", ID: candidate.Port, Driver: candidate.Service, Status: status, Problem: problem})
 					}
 				}
 			}
 		}
+		imports[i].Functions = platform.EnrichDevice(platform.Device{Functions: imports[i].Functions}).Functions
 		imports[i] = platform.FinalizeImport(imports[i])
+	}
+}
+
+func windowsBindingStatus(device pnpDevice, kind string) (string, string) {
+	problem := strings.TrimSpace(device.Problem)
+	if problem == "0" || strings.EqualFold(problem, "CM_PROB_NONE") {
+		problem = ""
+	}
+	switch {
+	case problem == "28" || strings.EqualFold(problem, "CM_PROB_FAILED_INSTALL"):
+		return "driver_missing", ""
+	case problem != "" || (device.Status != "" && !strings.EqualFold(device.Status, "OK")):
+		if problem == "" {
+			problem = device.Status
+		}
+		return "error", problem
+	case kind == "hub" || windowsEnumeratorService(device.Service):
+		return "enumerated", ""
+	case device.Service == "" && device.Port == "" && expectsWindowsDriver(kind):
+		return "driver_missing", ""
+	case kind == "network" && strings.EqualFold(device.Class, "Net") && device.NetworkName == "":
+		return "enumerating", ""
+	case device.Service == "" && device.Port == "":
+		return "enumerated", ""
+	default:
+		return "ready", ""
+	}
+}
+
+func windowsEnumeratorService(service string) bool {
+	switch strings.ToLower(strings.TrimSpace(service)) {
+	case "usbccgp", "usbhub", "usbhub3", "usbip2_ude", "usbip2_filter":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -460,13 +549,40 @@ func pnpFunctions(parent string, devices []pnpDevice) []platform.USBFunction {
 		byID[strings.ToUpper(device.InstanceID)] = device
 	}
 	var functions []platform.USBFunction
+	var root *pnpDevice
 	for _, device := range devices {
-		if strings.EqualFold(device.InstanceID, parent) || !pnpDescendsFrom(device, parent, byID) {
+		if strings.EqualFold(device.InstanceID, parent) {
+			root = &device
 			continue
 		}
-		functions = append(functions, platform.USBFunction{ID: device.InstanceID, Kind: pnpKind(device), Driver: device.Service, Description: device.FriendlyName})
+		if !pnpDescendsFrom(device, parent, byID) {
+			continue
+		}
+		functions = append(functions, pnpFunction(device))
+	}
+	if len(functions) == 0 && root != nil && !windowsEnumeratorService(root.Service) {
+		functions = append(functions, pnpFunction(*root))
 	}
 	return functions
+}
+
+func pnpFunction(device pnpDevice) platform.USBFunction {
+	function := platform.USBFunction{
+		ID: device.InstanceID, Kind: pnpKind(device), Driver: device.Service, Description: device.FriendlyName,
+	}
+	for _, compatibleID := range device.CompatibleIDs {
+		if descriptor := usbClassID.FindStringSubmatch(compatibleID); descriptor != nil {
+			function.Class, function.SubClass, function.Protocol = descriptor[1], descriptor[2], descriptor[3]
+			if function.Kind == "usb" {
+				function.Kind = ""
+			}
+			break
+		}
+	}
+	if number := usbInterfaceID.FindStringSubmatch(device.InstanceID); number != nil {
+		function.Interface = platform.ParseHexAttribute(number[1])
+	}
+	return platform.EnrichDevice(platform.Device{Functions: []platform.USBFunction{function}}).Functions[0]
 }
 
 func pnpDescendsFrom(device pnpDevice, parent string, byID map[string]pnpDevice) bool {
@@ -511,7 +627,7 @@ func pnpKind(device pnpDevice) string {
 
 func expectsWindowsDriver(kind string) bool {
 	switch kind {
-	case "serial", "debug", "hid", "storage", "network", "audio", "video", "printer", "security":
+	case "serial", "debug", "hid", "storage", "network", "audio", "video", "printer", "security", "usb":
 		return true
 	default:
 		return false
@@ -526,10 +642,10 @@ func parseImports(output string) ([]platform.Import, error) {
 	var item *platform.Import
 	for line := range strings.Lines(output) {
 		if header, ok := strings.CutPrefix(line, "Port "); ok {
-			number, state, _ := strings.Cut(header, ":")
+			number, state, found := strings.Cut(header, ":")
 			port, err := strconv.Atoi(number)
-			if err != nil || port < 1 {
-				return nil, fmt.Errorf("%w: invalid Win2 virtual port %q", platform.ErrUnavailable, number)
+			if !found || err != nil || port < 1 {
+				return nil, fmt.Errorf("%w: invalid Win2 virtual port header %q", platform.ErrUnavailable, line)
 			}
 			imports = append(imports, platform.Import{Port: port, State: strings.TrimSpace(state)})
 			item = &imports[len(imports)-1]
@@ -577,11 +693,7 @@ func (a *Adapter) Doctor(ctx context.Context) []platform.Check {
 	sc := filepath.Join(os.Getenv("SystemRoot"), "System32", "sc.exe")
 	for _, name := range []string{"usbipd", "VBoxUSBMon", "usbip2_ude", "usbip2_filter"} {
 		state, err := run(ctx, "sc.exe", sc, nil, "query", name)
-		status := "registered in Service Control Manager"
-		if strings.Contains(state, "RUNNING") {
-			status = "running"
-		}
-		checks = append(checks, check(name, status, err))
+		checks = append(checks, windowsServiceCheck(name, state, err))
 	}
 	socket, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", "127.0.0.1:3240")
 	if socket != nil {
@@ -600,6 +712,20 @@ func (a *Adapter) Doctor(ctx context.Context) []platform.Check {
 		checks = append(checks, platform.Check{Name: "TCP 3240 peer isolation", OK: scoped, Detail: detail})
 	}
 	return checks
+}
+
+func windowsServiceCheck(name, state string, err error) platform.Check {
+	if err != nil {
+		return check(name, "", err)
+	}
+	if strings.Contains(state, "RUNNING") {
+		return platform.Check{Name: name, OK: true, Detail: "running"}
+	}
+	detail := "registered in Service Control Manager, but not running (start service or reboot Windows if just installed)"
+	if name == "usbipd" {
+		detail = "service is stopped (start the usbipd service or reboot Windows)"
+	}
+	return platform.Check{Name: name, OK: false, Detail: detail}
 }
 
 func check(name, detail string, err error) platform.Check {

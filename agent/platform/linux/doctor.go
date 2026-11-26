@@ -18,7 +18,11 @@ func (a *Adapter) Doctor(ctx context.Context) []platform.Check {
 		version, err := a.run(ctx, tool.name, tool.versionFlag)
 		check := platform.Check{Name: tool.name, OK: err == nil, Detail: strings.TrimSpace(version)}
 		if err != nil {
-			check.Detail = err.Error()
+			detail := err.Error()
+			if tool.name == "usbip" && strings.Contains(strings.ToLower(detail), "not found for kernel") {
+				detail += " (install linux-tools-$(uname -r) on Ubuntu)"
+			}
+			check.Detail = detail
 		}
 		checks = append(checks, check)
 	}
@@ -31,7 +35,7 @@ func (a *Adapter) Doctor(ctx context.Context) []platform.Check {
 		ready := err == nil && info.IsDir()
 		check := platform.Check{Name: driver.module, OK: ready, Detail: "kernel driver available"}
 		if !ready {
-			check.Detail = "kernel driver unavailable; try sudo modprobe " + driver.module
+			check.Detail = "kernel driver unavailable; try sudo modprobe " + driver.module + " (or install linux-modules-extra-$(uname -r) on Ubuntu)"
 		}
 		checks = append(checks, check)
 	}

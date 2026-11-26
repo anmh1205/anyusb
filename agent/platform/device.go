@@ -22,67 +22,18 @@ var stLinkProducts = map[string]bool{
 	"374f": true, "3752": true, "3753": true, "3754": true,
 }
 
-func normalizeClass(value string) string {
-	value = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(value), "0x"))
-	if len(value) == 1 {
-		value = "0" + value
-	}
-	return value
-}
-
-func functionKind(class, subclass, protocol string) string {
-	class, subclass, protocol = normalizeClass(class), normalizeClass(subclass), normalizeClass(protocol)
-	switch class {
-	case "01":
-		return "audio"
-	case "02", "0a":
-		return "serial"
-	case "03":
-		return "hid"
-	case "07":
-		return "printer"
-	case "08":
-		return "storage"
-	case "09":
-		return "hub"
-	case "0e":
-		return "video"
-	case "e0":
-		return "network"
-	case "fe":
-		if subclass == "01" {
-			return "dfu"
-		}
-	case "ff":
-		return "vendor"
-	}
-	if class == "00" || class == "ef" || class == "" {
-		return "unknown"
-	}
-	_ = protocol
-	return "usb"
-}
-
 func EnrichDevice(device Device) Device {
 	device.DeviceClass = normalizeClass(device.DeviceClass)
 	device.DeviceSubClass = normalizeClass(device.DeviceSubClass)
 	device.DeviceProtocol = normalizeClass(device.DeviceProtocol)
+	device.Functions = classifyFunctions(device.Functions)
 	profiles := make([]string, 0, len(device.Functions)+2)
 	for i := range device.Functions {
 		function := &device.Functions[i]
-		function.Class = normalizeClass(function.Class)
-		function.SubClass = normalizeClass(function.SubClass)
-		function.Protocol = normalizeClass(function.Protocol)
-		if function.Kind == "" {
-			function.Kind = functionKind(function.Class, function.SubClass, function.Protocol)
-		}
-		if function.ID == "" {
-			function.ID = fmt.Sprintf("%d:%d.%d", function.Configuration, function.Interface, function.Alternate)
-		}
 		profiles = append(profiles, function.Kind)
 	}
 	if len(device.Functions) == 0 {
-		profiles = append(profiles, functionKind(device.DeviceClass, device.DeviceSubClass, device.DeviceProtocol))
+		profiles = append(profiles, classifyDescriptor(device.DeviceClass, device.DeviceSubClass, device.DeviceProtocol))
 	}
 
 	vid, pid := strings.ToLower(device.VendorID), strings.ToLower(device.ProductID)
@@ -106,23 +57,19 @@ func EnrichDevice(device Device) Device {
 	}
 	device.Profiles = profiles
 	device.SharePolicy, device.ReconnectPolicy = ShareAllow, ReconnectAutomatic
-	for _, profile := range profiles {
-		switch profile {
-		case "hub":
-			device.Risk, device.SharePolicy, device.ReconnectPolicy = "topology", ShareBlock, ReconnectConfirmed
-		case "storage":
-			device.Risk, device.SharePolicy, device.ReconnectPolicy = "storage", ShareConfirm, ReconnectConfirmed
-		case "hid":
-			if device.Risk == "" {
-				device.Risk, device.SharePolicy, device.ReconnectPolicy = "input", ShareConfirm, ReconnectConfirmed
-			}
-		case "network":
-			device.Risk, device.SharePolicy, device.ReconnectPolicy = "network", ShareConfirm, ReconnectConfirmed
-		case "audio", "video":
-			if device.Risk == "" {
-				device.Risk, device.SharePolicy, device.ReconnectPolicy = "timing", ShareConfirm, ReconnectConfirmed
-			}
-		}
+	// Policies are ordered explicitly so a lower-risk function can never
+	// downgrade a whole-device block selected for an embedded hub.
+	switch {
+	case slices.Contains(profiles, "hub"):
+		device.Risk, device.SharePolicy, device.ReconnectPolicy = "topology", ShareBlock, ReconnectConfirmed
+	case slices.Contains(profiles, "storage"):
+		device.Risk, device.SharePolicy, device.ReconnectPolicy = "storage", ShareConfirm, ReconnectConfirmed
+	case slices.Contains(profiles, "network"):
+		device.Risk, device.SharePolicy, device.ReconnectPolicy = "network", ShareConfirm, ReconnectConfirmed
+	case slices.Contains(profiles, "hid"):
+		device.Risk, device.SharePolicy, device.ReconnectPolicy = "input", ShareConfirm, ReconnectConfirmed
+	case slices.Contains(profiles, "audio") || slices.Contains(profiles, "video"):
+		device.Risk, device.SharePolicy, device.ReconnectPolicy = "timing", ShareConfirm, ReconnectConfirmed
 	}
 	return device
 }
@@ -135,7 +82,10 @@ func FinalizeImport(imported Import) Import {
 		if imported.Bindings[i].Kind != imported.Bindings[j].Kind {
 			return imported.Bindings[i].Kind < imported.Bindings[j].Kind
 		}
-		return imported.Bindings[i].ID < imported.Bindings[j].ID
+		if imported.Bindings[i].ID != imported.Bindings[j].ID {
+			return imported.Bindings[i].ID < imported.Bindings[j].ID
+		}
+		return imported.Bindings[i].Function < imported.Bindings[j].Function
 	})
 	imported.Bindings = slices.CompactFunc(imported.Bindings, func(a, b LocalBinding) bool {
 		return a.Function == b.Function && a.Kind == b.Kind && a.ID == b.ID

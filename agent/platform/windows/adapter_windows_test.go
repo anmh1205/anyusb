@@ -30,6 +30,9 @@ func TestWin2PortInventory(t *testing.T) {
 	if empty, err := parseImports(""); err != nil || len(empty) > 0 {
 		t.Fatalf("empty imports = %v, %v", empty, err)
 	}
+	if _, err := parseImports("Imported USB devices\r\nPort 03 device in use\r\n"); err == nil {
+		t.Fatal("malformed Win2 port header was accepted")
+	}
 }
 
 func TestWin2COMMappingUsesVirtualHubPortForIdenticalDevices(t *testing.T) {
@@ -46,6 +49,17 @@ func TestWin2COMMappingUsesVirtualHubPortForIdenticalDevices(t *testing.T) {
 	}
 	if len(imports[1].SerialPorts) != 1 || imports[1].SerialPorts[0] != "COM11" {
 		t.Fatalf("port 4 serial mapping = %v", imports[1].SerialPorts)
+	}
+}
+
+func TestWin2FallbackDoesNotGuessBetweenIdenticalDevices(t *testing.T) {
+	imports := []platform.Import{{Port: 3, State: "attached", Name: "Espressif (303a:1001)"}}
+	mapImportBindings(imports, []pnpDevice{
+		{Port: "COM8", InstanceID: `USB\VID_303A&PID_1001&MI_00\A`, Virtual: true},
+		{Port: "COM11", InstanceID: `USB\VID_303A&PID_1001&MI_00\B`, Virtual: true},
+	})
+	if len(imports[0].Bindings) != 0 || len(imports[0].SerialPorts) != 0 || imports[0].Readiness != "attached" {
+		t.Fatalf("ambiguous fallback guessed a binding: %+v", imports[0])
 	}
 }
 
@@ -73,13 +87,69 @@ func TestWin2CompositeBindingsStayOnTheirVirtualPorts(t *testing.T) {
 	}
 }
 
+func TestWin2ReadinessRequiresUsableBinding(t *testing.T) {
+	tests := []struct {
+		name      string
+		device    pnpDevice
+		readiness string
+		status    string
+		problem   string
+	}{
+		{"composite parent", pnpDevice{InstanceID: `USB\VID_1209&PID_A11B\PARENT`, Class: "USB", Service: "usbccgp", Status: "OK", Problem: "0"}, "unknown", "enumerated", ""},
+		{"driverless interface", pnpDevice{InstanceID: `USB\VID_1209&PID_A11B&MI_00\CHILD`, Class: "USB", Status: "OK", Problem: "0"}, "driver_missing", "driver_missing", ""},
+		{"winusb interface", pnpDevice{InstanceID: `USB\VID_1209&PID_A11B&MI_00\CHILD`, Class: "USB", Service: "WinUSB", Status: "OK", Problem: "0"}, "ready", "ready", ""},
+		{"driver install needed", pnpDevice{InstanceID: `USB\VID_1209&PID_A11B&MI_00\CHILD`, Class: "USB", Problem: "28"}, "driver_missing", "driver_missing", ""},
+		{"problem code", pnpDevice{InstanceID: `USB\VID_1209&PID_A11B&MI_00\CHILD`, Class: "USB", Service: "WinUSB", Status: "OK", Problem: "10"}, "error", "error", "10"},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			imports := []platform.Import{{Port: index + 1, State: "attached"}}
+			test.device.Virtual, test.device.VirtualPort = true, index+1
+			mapImportBindings(imports, []pnpDevice{test.device})
+			if imports[0].Readiness != test.readiness || len(imports[0].Bindings) != 1 ||
+				imports[0].Bindings[0].Status != test.status || imports[0].Bindings[0].Problem != test.problem {
+				t.Fatalf("Windows import readiness = %+v", imports[0])
+			}
+		})
+	}
+}
+
+func TestWin2NetworkBindingMatchesNetworkProfile(t *testing.T) {
+	imports := []platform.Import{{Port: 7, State: "attached", Name: "CDC NCM (1209:0002)"}}
+	mapImportBindings(imports, []pnpDevice{{
+		InstanceID: `USB\VID_1209&PID_0002\NCM`, Virtual: true, VirtualPort: 7,
+		Class: "Net", FriendlyName: "USB NCM Network Adapter", Service: "UsbNcm", Status: "OK", NetworkName: "Ethernet 4",
+	}})
+	if imports[0].Readiness != "ready" || len(imports[0].Bindings) != 1 || imports[0].Bindings[0].Kind != "network" ||
+		imports[0].Functions[0].Kind != "network" || imports[0].Bindings[0].ID != "Ethernet 4" {
+		t.Fatalf("Windows NCM import = %+v", imports[0])
+	}
+}
+
+func TestWindowsNCMDescriptorRequiresConfirmationWithoutADriver(t *testing.T) {
+	parent := `USB\VID_1209&PID_0002\NCM`
+	devices := []pnpDevice{{InstanceID: parent, Service: "usbccgp"}, {
+		InstanceID: `USB\VID_1209&PID_0002&MI_02\NCM`, Parent: parent,
+		CompatibleIDs: []string{`USB\Class_02&SubClass_0D&Prot_00`, `USB\Class_02`},
+	}}
+	device := platform.EnrichDevice(platform.Device{Functions: pnpFunctions(parent, devices)})
+	if len(device.Functions) != 1 || device.Functions[0].Interface != 2 || device.Risk != "network" ||
+		device.SharePolicy != platform.ShareConfirm || device.ReconnectPolicy != platform.ReconnectConfirmed {
+		t.Fatalf("driverless Windows NCM = %+v", device)
+	}
+}
+
 func TestPowerShellPnPInstanceIDs(t *testing.T) {
 	const fixture = `
 function Get-PnpDevice { param($Class, [switch]$PresentOnly) }
 function Get-PnpDeviceProperty {
     [CmdletBinding()]
-    param([ValidateNotNullOrEmpty()][string]$InstanceId, [string]$KeyName)
-    [pscustomobject]@{Data=''}
+    param([ValidateNotNullOrEmpty()][string[]]$InstanceId, [string[]]$KeyName)
+    foreach ($id in $InstanceId) {
+        foreach ($key in $KeyName) {
+            [pscustomobject]@{InstanceId=$id; KeyName=$key; Data=''}
+        }
+    }
 }
 `
 	powerShell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
@@ -115,21 +185,27 @@ function Get-PnpDevice {
 }
 function Get-PnpDeviceProperty {
     [CmdletBinding()]
-    param([ValidateNotNullOrEmpty()][string]$InstanceId, [string]$KeyName)
-    $data = switch ($KeyName) {
-        'DEVPKEY_Device_Parent' {
-            switch ($InstanceId) {
-                'USB\VID_303A&PID_1001&MI_00\A' { 'USB\VID_303A&PID_1001\A' }
-                'USB\VID_303A&PID_1001\A' { 'USB\ROOT_HUB30\VIRTUAL' }
-                'USB\ROOT_HUB30\VIRTUAL' { 'ROOT\USBIP_WIN2\UDE\0000' }
+    param([ValidateNotNullOrEmpty()][string[]]$InstanceId, [string[]]$KeyName)
+    foreach ($id in $InstanceId) {
+        foreach ($key in $KeyName) {
+            $data = switch ($key) {
+                'DEVPKEY_Device_Parent' {
+                    switch ($id) {
+                        'USB\VID_303A&PID_1001&MI_00\A' { 'USB\VID_303A&PID_1001\A' }
+                        'USB\VID_303A&PID_1001\A' { 'USB\ROOT_HUB30\VIRTUAL' }
+                        'USB\ROOT_HUB30\VIRTUAL' { 'ROOT\USB\0002' }
+                        'ROOT\USB\0002' { 'HTREE\ROOT\0' }
+                        default { '' }
+                    }
+                }
+                'DEVPKEY_Device_Address' { if ($id -eq 'USB\VID_303A&PID_1001\A') { 3 } else { 0 } }
+                'DEVPKEY_Device_LocationPaths' { 'USBROOT(0)#USB(3)' }
+                'DEVPKEY_Device_Service' { if ($id -eq 'ROOT\USB\0002') { 'usbip2_ude' } else { '' } }
                 default { '' }
             }
+            [pscustomobject]@{InstanceId=$id; KeyName=$key; Data=$data}
         }
-        'DEVPKEY_Device_Address' { if ($InstanceId -eq 'USB\VID_303A&PID_1001\A') { 3 } else { 0 } }
-        'DEVPKEY_Device_LocationPaths' { 'USBROOT(0)#USB(3)' }
-        default { '' }
     }
-    [pscustomobject]@{Data=$data}
 }
 `
 	powerShell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
@@ -143,5 +219,17 @@ function Get-PnpDeviceProperty {
 	}
 	if len(devices) != 1 || !devices[0].Virtual || devices[0].VirtualPort != 3 || devices[0].Port != "COM8" {
 		t.Fatalf("virtual COM topology = %+v", devices)
+	}
+}
+
+func TestWindowsServiceCheckRequiresRunningState(t *testing.T) {
+	if got := windowsServiceCheck("usbip2_ude", "STATE : 4  RUNNING", nil); !got.OK || got.Detail != "running" {
+		t.Fatalf("running check = %+v", got)
+	}
+	if got := windowsServiceCheck("usbip2_ude", "STATE : 1  STOPPED", nil); got.OK || !strings.Contains(got.Detail, "reboot") {
+		t.Fatalf("stopped driver check = %+v", got)
+	}
+	if got := windowsServiceCheck("usbipd", "STATE : 1  STOPPED", nil); got.OK || !strings.Contains(got.Detail, "stopped") {
+		t.Fatalf("stopped service check = %+v", got)
 	}
 }

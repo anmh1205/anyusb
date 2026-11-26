@@ -1,13 +1,12 @@
 package platform
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -58,6 +57,10 @@ var profileProbeSpecs = map[string]probeSpec{
 }
 
 func RunProfileProbe(ctx context.Context, profile, serial string) (ProbeResult, error) {
+	return runProfileProbe(ctx, OSNativeRunner{}, profile, serial)
+}
+
+func runProfileProbe(ctx context.Context, runner NativeRunner, profile, serial string) (ProbeResult, error) {
 	profile = strings.ToLower(strings.TrimSpace(profile))
 	serial = strings.TrimSpace(serial)
 	result := ProbeResult{Profile: profile, Serial: serial}
@@ -91,32 +94,27 @@ func RunProfileProbe(ctx context.Context, profile, serial string) (ProbeResult, 
 		defer os.Remove(commandFile)
 		args = []string{"-NoGui", "1", "-CommandFile", commandFile}
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	result.Version = probeToolVersion(probeCtx, tool, spec.versionArgs)
+	result.Version = probeToolVersion(ctx, runner, tool, spec.versionArgs)
 	result.Command = append([]string{tool}, args...)
-	started := time.Now()
-	cmd := exec.CommandContext(probeCtx, tool, args...)
-	cmd.Env = append(os.Environ(), "LC_ALL=C")
-	var output bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &output, &output
-	err := cmd.Run()
-	result.DurationMS = time.Since(started).Milliseconds()
-	text := output.String()
-	if len(text) > 64<<10 {
-		text = text[:64<<10] + "\n[output truncated]"
+	command, err := runner.Run(ctx, CommandRequest{
+		Tool: profile + " probe", Path: tool, Args: args, Environment: []string{"LC_ALL=C"}, Timeout: 20 * time.Second, OutputLimit: 64 << 10,
+		SensitiveOutput: true,
+	})
+	result.DurationMS = command.DurationMS
+	result.Command = command.Command
+	text := command.Stdout
+	if command.Stderr != "" {
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		text += command.Stderr
+	}
+	if command.Truncated {
+		text += "\n[output truncated]"
 	}
 	result.Output = strings.TrimSpace(text)
-	if probeCtx.Err() != nil {
-		result.Error = probeCtx.Err().Error()
-		return result, nil
-	}
 	if err != nil {
 		result.Error = err.Error()
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) {
-			return result, nil
-		}
 	}
 	if serial == "" {
 		result.Error = "device serial is unavailable; tool output cannot be tied to this import"
@@ -144,9 +142,12 @@ func findProbeTool(spec probeSpec) string {
 	if runtime.GOOS == "windows" {
 		roots := []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramW6432"), os.Getenv("ProgramFiles(x86)")}
 		for _, root := range roots {
+			if root == "" {
+				continue
+			}
 			for _, pattern := range spec.commonPaths {
 				path := filepath.Join(root, pattern)
-				if info, err := os.Stat(path); err == nil && !info.IsDir() {
+				if info, err := os.Stat(path); err == nil && !info.IsDir() && filepath.IsAbs(path) {
 					return path
 				}
 			}
@@ -155,14 +156,13 @@ func findProbeTool(spec probeSpec) string {
 	return ""
 }
 
-func probeToolVersion(ctx context.Context, tool string, args []string) string {
+func probeToolVersion(ctx context.Context, runner NativeRunner, tool string, args []string) string {
 	if len(args) == 0 {
 		return ""
 	}
-	versionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	output, _ := exec.CommandContext(versionCtx, tool, args...).CombinedOutput()
-	for _, line := range strings.Split(string(output), "\n") {
+	result, _ := runner.Run(ctx, CommandRequest{Tool: filepath.Base(tool) + " version", Path: tool, Args: args, Timeout: 5 * time.Second, OutputLimit: 4 << 10})
+	output := result.Stdout + "\n" + result.Stderr
+	for _, line := range strings.Split(output, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			if len(line) > 240 {
@@ -191,8 +191,18 @@ func ProfileToolChecks() []Check {
 }
 
 func containsIdentifier(output, serial string) bool {
-	normalize := func(value string) string {
-		return strings.NewReplacer(" ", "", "-", "", ":", "", "_", "").Replace(strings.ToLower(value))
+	normalized := strings.NewReplacer(" ", "", "-", "", ":", "", "_", "", ".", "").Replace(strings.ToLower(strings.TrimSpace(serial)))
+	if normalized == "" {
+		return false
 	}
-	return strings.Contains(normalize(output), normalize(serial))
+	var pattern strings.Builder
+	pattern.WriteString(`(?i)(^|[^0-9a-z])`)
+	for index, char := range normalized {
+		if index > 0 {
+			pattern.WriteString(`[\s:_.-]*`)
+		}
+		pattern.WriteString(regexp.QuoteMeta(string(char)))
+	}
+	pattern.WriteString(`([^0-9a-z]|$)`)
+	return regexp.MustCompile(pattern.String()).FindStringIndex(output) != nil
 }

@@ -27,10 +27,22 @@ func (a *Adapter) ListRemote(ctx context.Context, endpoint string) ([]platform.R
 }
 
 func (a *Adapter) ListImports(ctx context.Context) ([]platform.Import, error) {
-	output, err := a.run(ctx, "usbip", "port")
+	binary, err := a.binary("usbip")
 	if err != nil {
 		return nil, err
 	}
+	runner := a.runner
+	if runner == nil {
+		runner = platform.OSNativeRunner{}
+	}
+	res, err := runner.Run(ctx, platform.CommandRequest{
+		Tool: "usbip", Path: binary, Args: []string{"port"}, Environment: []string{"LC_ALL=C"}, Timeout: commandTimeout,
+		SensitiveOutput: true, SkipDiagnosticOnOK: true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	output := res.Stdout
 	imports, err := parseImports(output)
 	if err != nil {
 		return nil, err
@@ -136,8 +148,9 @@ func (a *Adapter) localBindings(busID string, functions []platform.USBFunction) 
 			case "input":
 				identifier = filepath.Join(a.devRoot, "input", entry.Name())
 			}
+			status := localBindingStatus(class.kind, identifier)
 			bindings = append(bindings, platform.LocalBinding{Function: function, Kind: class.kind, ID: identifier,
-				Driver: functionDrivers[function], Status: "ready"})
+				Driver: functionDrivers[function], Status: status})
 		}
 	}
 	base := filepath.Join(a.sysRoot, "bus", "usb", "devices", busID)
@@ -153,8 +166,16 @@ func (a *Adapter) localBindings(busID string, functions []platform.USBFunction) 
 	for _, binding := range bindings {
 		seenFunctions[binding.Function] = true
 	}
+	// A CDC function exposes one OS endpoint for its control/data pair.
+	// A tty or network interface on either member is evidence for both.
+	seenCDC := make(map[[2]int]bool)
 	for _, function := range functions {
 		if seenFunctions[function.ID] {
+			seenCDC[cdcBindingGroup(function)] = true
+		}
+	}
+	for _, function := range functions {
+		if seenFunctions[function.ID] || ((function.CDCControl != nil || function.Class == "02") && seenCDC[cdcBindingGroup(function)]) {
 			continue
 		}
 		status := "bound"
@@ -169,6 +190,24 @@ func (a *Adapter) localBindings(busID string, functions []platform.USBFunction) 
 		}
 	}
 	return bindings
+}
+
+func cdcBindingGroup(function platform.USBFunction) [2]int {
+	control := function.Interface
+	if function.CDCControl != nil {
+		control = *function.CDCControl
+	}
+	return [2]int{function.Configuration, control}
+}
+
+func localBindingStatus(kind, identifier string) string {
+	switch kind {
+	case "serial", "hid", "storage", "input":
+		if info, err := os.Stat(identifier); err != nil || info.IsDir() {
+			return "enumerating"
+		}
+	}
+	return "ready"
 }
 
 func functionFromPath(path, busID string) string {
